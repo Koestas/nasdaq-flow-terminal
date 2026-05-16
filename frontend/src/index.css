@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0a0e17;
+  color: #c8d8e8;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0e17;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2d40;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2d4060;
+}
+
+.glow-green { box-shadow: 0 0 8px rgba(0, 255, 136, 0.4); }
+.glow-red   { box-shadow: 0 0 8px rgba(255, 68, 102, 0.4); }
+.glow-blue  { box-shadow: 0 0 8px rgba(0, 170, 255, 0.4); }
+
+@layer components {
+  .card {
+    @apply bg-terminal-card border border-terminal-border rounded-lg p-4;
+  }
+  .card2 {
+    @apply bg-terminal-card2 border border-terminal-border rounded-lg p-4;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold;
+  }
+  .badge-green {
+    @apply badge bg-terminal-green/10 text-terminal-green border border-terminal-green/30;
+  }
+  .badge-red {
+    @apply badge bg-terminal-red/10 text-terminal-red border border-terminal-red/30;
+  }
+  .badge-yellow {
+    @apply badge bg-terminal-yellow/10 text-terminal-yellow border border-terminal-yellow/30;
+  }
+  .badge-blue {
+    @apply badge bg-terminal-blue/10 text-terminal-blue border border-terminal-blue/30;
+  }
+  .badge-muted {
+    @apply badge bg-terminal-border text-terminal-muted;
+  }
+  .stat-value {
+    @apply text-2xl font-bold text-terminal-text;
+  }
+  .stat-label {
+    @apply text-xs text-terminal-muted uppercase tracking-wider;
+  }
+  .table-header {
+    @apply text-xs text-terminal-muted uppercase tracking-wider py-2 px-3 text-left;
+  }
+  .table-cell {
+    @apply py-2 px-3 text-sm text-terminal-text border-t border-terminal-border/40;
+  }
+}

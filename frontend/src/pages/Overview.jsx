@@ -1,0 +1,282 @@
+import { useQuery } from '@tanstack/react-query'
+import { apiFetch, fmt } from '../lib/api'
+import BiasPanel from '../components/BiasPanel'
+import ErrorBoundary from '../components/ErrorBoundary'
+import { CardSkeleton, ChartSkeleton } from '../components/LoadingSkeleton'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts'
+import { clsx } from 'clsx'
+import { ChevronDown, ChevronUp } from 'lucide-react'
+import { useState } from 'react'
+
+function StatCard({ label, value, sub, color = 'text-terminal-text' }) {
+  return (
+    <div className="card">
+      <div className="stat-label">{label}</div>
+      <div className={`stat-value mt-1 ${color}`}>{value}</div>
+      {sub && <div className="text-xs text-terminal-muted mt-1">{sub}</div>}
+    </div>
+  )
+}
+
+function ExplainPanel({ title, children }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border border-terminal-border/40 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-2 text-xs text-terminal-muted hover:text-terminal-text bg-terminal-card2 transition-colors"
+      >
+        <span className="uppercase tracking-wider">{title}</span>
+        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && (
+        <div className="px-4 py-3 bg-terminal-card text-xs text-terminal-muted space-y-1">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function Overview() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['overview'],
+    queryFn: () => apiFetch('/api/market/overview'),
+    refetchInterval: 30_000,
+  })
+
+  const { data: waveData, isLoading: waveLoading } = useQuery({
+    queryKey: ['wave'],
+    queryFn: () => apiFetch('/api/flow/wave'),
+    refetchInterval: 20_000,
+  })
+
+  const { data: unusualData } = useQuery({
+    queryKey: ['unusual'],
+    queryFn: () => apiFetch('/api/flow/unusual'),
+    refetchInterval: 30_000,
+  })
+
+  const { data: newsData } = useQuery({
+    queryKey: ['news'],
+    queryFn: () => apiFetch('/api/market/news'),
+    refetchInterval: 60_000,
+  })
+
+  const price = data?.price
+  const wave = data?.wave_summary
+  const leadership = data?.leadership_summary
+  const session = data?.session
+  const unusual = unusualData?.contracts || []
+  const news = newsData?.news || []
+  const history = waveData?.history || []
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-bold text-terminal-text">Overview</h1>
+        {session && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className={clsx('badge', session.in_killzone ? 'badge-green' : 'badge-muted')}>
+              {session.session}
+            </span>
+            <span className="text-terminal-muted">{session.time_et}</span>
+          </div>
+        )}
+      </div>
+
+      {session?.session_note && (
+        <div className="text-xs text-terminal-yellow/80 bg-terminal-yellow/5 border border-terminal-yellow/20 rounded px-3 py-2">
+          {session.session_note}
+        </div>
+      )}
+
+      {/* Bias Panel */}
+      <ErrorBoundary>
+        {isLoading ? <CardSkeleton /> : <BiasPanel bias={data?.bias} wave={wave} />}
+      </ErrorBoundary>
+
+      {/* Stat Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <ErrorBoundary>
+          {isLoading ? <CardSkeleton /> : (
+            <StatCard
+              label="QQQ Price"
+              value={fmt.price(price?.price)}
+              sub={`${fmt.pct(price?.change_pct)} today`}
+              color={(price?.change_pct || 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'}
+            />
+          )}
+        </ErrorBoundary>
+        <ErrorBoundary>
+          {isLoading ? <CardSkeleton /> : (
+            <StatCard
+              label="Net Premium"
+              value={fmt.premium(wave?.net_wave)}
+              sub={wave?.wave_direction}
+              color={(wave?.net_wave || 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'}
+            />
+          )}
+        </ErrorBoundary>
+        <ErrorBoundary>
+          {isLoading ? <CardSkeleton /> : (
+            <StatCard
+              label="Call/Put Ratio"
+              value={wave?.call_put_ratio ? wave.call_put_ratio.toFixed(2) : '--'}
+              sub={wave?.call_dominance_pct ? `${wave.call_dominance_pct.toFixed(1)}% call dominance` : ''}
+              color="text-terminal-text"
+            />
+          )}
+        </ErrorBoundary>
+        <ErrorBoundary>
+          {isLoading ? <CardSkeleton /> : (
+            <StatCard
+              label="Leadership"
+              value={leadership ? `${leadership.green}/${leadership.total}` : '--'}
+              sub={leadership ? `${leadership.breadth_pct}% green` : ''}
+              color={leadership?.breadth_pct >= 60 ? 'text-terminal-green' : leadership?.breadth_pct <= 40 ? 'text-terminal-red' : 'text-terminal-yellow'}
+            />
+          )}
+        </ErrorBoundary>
+      </div>
+
+      {/* Charts row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* WAVE chart */}
+        <ErrorBoundary>
+          <div className="card">
+            <div className="stat-label mb-3">WAVE — Call vs Put Premium</div>
+            {waveLoading || history.length === 0 ? (
+              <ChartSkeleton height={160} />
+            ) : (
+              <ResponsiveContainer width="100%" height={160}>
+                <AreaChart data={history} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="callGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#00ff88" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#00ff88" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="putGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ff4466" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#ff4466" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="timestamp" hide />
+                  <YAxis hide />
+                  <Tooltip
+                    contentStyle={{ background: '#0f1623', border: '1px solid #1e2d40', fontSize: 11 }}
+                    formatter={(v, name) => [fmt.premium(v), name]}
+                  />
+                  <Area type="monotone" dataKey="call_wave" stroke="#00ff88" fill="url(#callGrad)" strokeWidth={1.5} name="Calls" dot={false} />
+                  <Area type="monotone" dataKey="put_wave" stroke="#ff4466" fill="url(#putGrad)" strokeWidth={1.5} name="Puts" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </ErrorBoundary>
+
+        {/* Levels card */}
+        <ErrorBoundary>
+          <div className="card space-y-2">
+            <div className="stat-label mb-1">Key Levels</div>
+            {isLoading ? <CardSkeleton /> : (
+              <div className="space-y-2 text-sm">
+                {[
+                  { label: 'VWAP', value: fmt.price(data?.vwap), status: data?.vwap_status },
+                  { label: 'Call Wall', value: fmt.price(data?.call_wall) },
+                  { label: 'Put Wall', value: fmt.price(data?.put_wall) },
+                  { label: 'Day High', value: fmt.price(price?.day_high) },
+                  { label: 'Day Low', value: fmt.price(price?.day_low) },
+                ].map(({ label, value, status }) => (
+                  <div key={label} className="flex items-center justify-between">
+                    <span className="text-terminal-muted">{label}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-terminal-text font-semibold">{value}</span>
+                      {status && (
+                        <span className={clsx('badge text-xs', status === 'above' ? 'badge-green' : 'badge-red')}>
+                          {status}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </ErrorBoundary>
+      </div>
+
+      {/* Unusual activity */}
+      {unusual.length > 0 && (
+        <ErrorBoundary>
+          <div className="card">
+            <div className="stat-label mb-3">Recent Unusual Activity</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr>
+                    {['Contract', 'Premium', 'Vol/OI', 'Signal', 'Reason'].map(h => (
+                      <th key={h} className="table-header">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {unusual.slice(0, 5).map((c, i) => (
+                    <tr key={i} className={c.side === 'call' ? 'bg-terminal-green/5' : 'bg-terminal-red/5'}>
+                      <td className="table-cell font-semibold">
+                        QQQ {c.strike} {c.side?.toUpperCase()} {c.expiration}
+                      </td>
+                      <td className={`table-cell font-semibold ${c.side === 'call' ? 'text-terminal-green' : 'text-terminal-red'}`}>
+                        {fmt.premium(c.estimated_premium)}
+                      </td>
+                      <td className="table-cell">{c.volume_oi_ratio?.toFixed(1)}x</td>
+                      <td className="table-cell">
+                        <span className={c.side === 'call' ? 'badge-green' : 'badge-red'}>
+                          {c.side === 'call' ? '▲ Bullish' : '▼ Bearish'}
+                        </span>
+                      </td>
+                      <td className="table-cell text-terminal-muted">
+                        {c.unusual_reasons?.[0] || '--'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </ErrorBoundary>
+      )}
+
+      {/* News feed */}
+      {news.length > 0 && (
+        <ErrorBoundary>
+          <div className="card">
+            <div className="stat-label mb-3">Latest News</div>
+            <div className="space-y-2">
+              {news.slice(0, 5).map((item, i) => (
+                <div key={i} className="flex items-start gap-2 py-1 border-b border-terminal-border/30 last:border-0">
+                  <span className={clsx('badge mt-0.5 shrink-0',
+                    item.sentiment === 'bullish' ? 'badge-green' :
+                    item.sentiment === 'bearish' ? 'badge-red' : 'badge-muted'
+                  )}>
+                    {item.sentiment}
+                  </span>
+                  <div>
+                    <div className="text-xs text-terminal-text">{item.title}</div>
+                    <div className="text-xs text-terminal-muted">{item.publisher} · {fmt.timeAgo(item.timestamp)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </ErrorBoundary>
+      )}
+
+      <ExplainPanel title="How to use the Overview">
+        <p>Start here before every trade. This tab answers: <strong className="text-terminal-text">Should I look for longs, shorts, or no trade?</strong></p>
+        <p className="mt-1">The <strong className="text-terminal-green">Bias Score</strong> combines VWAP position, WAVE direction, leadership breadth, and price momentum into a single -100 to +100 reading.</p>
+        <p className="mt-1"><strong className="text-terminal-yellow">Important:</strong> Wait for the NY Killzone (9:30–11:30 AM ET) for highest-quality setups. Avoid first 5 minutes.</p>
+      </ExplainPanel>
+    </div>
+  )
+}
