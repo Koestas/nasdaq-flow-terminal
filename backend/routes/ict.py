@@ -4,6 +4,7 @@ from engines.ict import (get_ict_analysis, get_session_context,
                           detect_fvg, extract_session_levels,
                           calc_discount_premium, identify_draw_on_liquidity,
                           detect_equal_highs_lows)
+from engines.ict_signals import get_advanced_signals
 from providers import yahoo, schwab as schwab_provider
 
 router = APIRouter(prefix="/api/ict", tags=["ict"])
@@ -60,4 +61,37 @@ async def session_levels(symbol: str = Query("QQQ")):
         "discount_premium": calc_discount_premium(levels, price),
         "draw_on_liquidity": identify_draw_on_liquidity(levels, equal_hl, price),
         "equal_highs_lows": equal_hl,
+    }
+
+
+@router.get("/advanced")
+async def advanced_analysis(symbol: str = Query("QQQ"), secondary: str = Query("SPY")):
+    """Advanced ICT signals: MSS/CHoCH, sweeps, OTE, IPDA, SMT, PO3."""
+    bars = await _get_bars(symbol)
+    bars_secondary = await _get_bars(secondary)
+
+    session_levels = extract_session_levels(bars)
+    equal_hl = detect_equal_highs_lows(bars)
+    price = session_levels.get("current_price")
+
+    # Get bias from basic analysis to orient OTE direction
+    basic = get_ict_analysis(bars, current_price=price)
+    long_score = basic.get("long_setup", {}).get("score", 0)
+    short_score = basic.get("short_setup", {}).get("score", 0)
+    bias = "bullish" if long_score > short_score else "bearish" if short_score > long_score else "neutral"
+
+    advanced = get_advanced_signals(
+        bars=bars,
+        session_levels=session_levels,
+        equal_hl=equal_hl,
+        bars_secondary=bars_secondary,
+        bias_direction=bias,
+    )
+
+    return {
+        "symbol": symbol,
+        "secondary": secondary,
+        "bias_direction": bias,
+        "current_price": price,
+        **advanced,
     }

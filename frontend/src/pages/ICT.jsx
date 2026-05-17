@@ -4,16 +4,22 @@ import { clsx } from 'clsx'
 import {
   Clock, Target, TrendingUp, TrendingDown, Minus,
   AlertTriangle, CheckCircle, XCircle, Zap, BarChart2,
-  RefreshCw, ChevronDown, ChevronUp
+  RefreshCw, ChevronDown, ChevronUp, Activity, Layers,
+  ArrowUpCircle, ArrowDownCircle, Radio
 } from 'lucide-react'
 import { useState } from 'react'
+
+// ---------------------------------------------------------------------------
+// Small reusable components
+// ---------------------------------------------------------------------------
 
 function SessionBadge({ session, inKillzone, timeEt }) {
   return (
     <div className={clsx(
       'flex items-center gap-2 px-3 py-2 rounded border text-sm font-mono',
-      inKillzone ? 'border-terminal-green/40 bg-terminal-green/10 text-terminal-green'
-                 : 'border-terminal-border bg-terminal-card text-terminal-muted'
+      inKillzone
+        ? 'border-terminal-green/40 bg-terminal-green/10 text-terminal-green'
+        : 'border-terminal-border bg-terminal-card text-terminal-muted'
     )}>
       <Clock size={14} />
       <span className="font-semibold">{timeEt}</span>
@@ -24,13 +30,44 @@ function SessionBadge({ session, inKillzone, timeEt }) {
   )
 }
 
+function PhaseBadge({ phase, label, description, minutesSinceOpen }) {
+  const colors = {
+    accumulation:         'border-terminal-muted/40 bg-terminal-card text-terminal-muted',
+    manipulation:         'border-terminal-yellow/40 bg-terminal-yellow/10 text-terminal-yellow',
+    distribution_bullish: 'border-terminal-green/40 bg-terminal-green/10 text-terminal-green',
+    distribution_bearish: 'border-terminal-red/40 bg-terminal-red/10 text-terminal-red',
+    late_session:         'border-terminal-muted/30 bg-terminal-card text-terminal-muted',
+    pre_market:           'border-terminal-blue/30 bg-terminal-blue/5 text-terminal-blue',
+  }
+  const icons = {
+    accumulation: <Activity size={13}/>,
+    manipulation: <AlertTriangle size={13}/>,
+    distribution_bullish: <TrendingUp size={13}/>,
+    distribution_bearish: <TrendingDown size={13}/>,
+    late_session: <Clock size={13}/>,
+    pre_market: <Clock size={13}/>,
+  }
+  return (
+    <div className={clsx('flex flex-col px-3 py-2 rounded border text-sm', colors[phase] || colors.accumulation)}>
+      <div className="flex items-center gap-2 font-semibold">
+        {icons[phase] || <Activity size={13}/>}
+        <span>PO3: {label}</span>
+        {minutesSinceOpen != null && minutesSinceOpen >= 0 && (
+          <span className="ml-auto text-xs opacity-70">{minutesSinceOpen}m in</span>
+        )}
+      </div>
+      {description && <p className="text-xs opacity-80 mt-0.5 leading-relaxed">{description}</p>}
+    </div>
+  )
+}
+
 function ZonePill({ zone, pct }) {
   const isPremium = zone === 'premium', isDiscount = zone === 'discount'
   return (
     <div className={clsx('inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold',
       isPremium ? 'bg-terminal-red/20 text-terminal-red border border-terminal-red/30' :
       isDiscount ? 'bg-terminal-green/20 text-terminal-green border border-terminal-green/30' :
-      'bg-terminal-border text-terminal-muted')}>
+      'bg-terminal-border text-terminal-muted border border-terminal-border')}>
       {isPremium ? <TrendingDown size={11}/> : isDiscount ? <TrendingUp size={11}/> : <Minus size={11}/>}
       {zone === 'premium' ? 'PREMIUM' : zone === 'discount' ? 'DISCOUNT' : 'UNKNOWN'}
       {pct != null && <span className="opacity-70">({pct}%)</span>}
@@ -101,8 +138,10 @@ function FVGRow({ fvg }) {
 
 function LevelRow({ label, value, variant = 'default' }) {
   if (!value) return null
-  const c = {default:'text-terminal-text',green:'text-terminal-green',red:'text-terminal-red',
-              yellow:'text-terminal-yellow',blue:'text-terminal-blue',muted:'text-terminal-muted'}
+  const c = {
+    default: 'text-terminal-text', green: 'text-terminal-green', red: 'text-terminal-red',
+    yellow: 'text-terminal-yellow', blue: 'text-terminal-blue', muted: 'text-terminal-muted',
+  }
   return (
     <div className="flex items-center justify-between text-xs py-1 border-b border-terminal-border/20">
       <span className="text-terminal-muted">{label}</span>
@@ -127,18 +166,183 @@ function EqualHL({ data }) {
             {e.is_high ? 'EQH' : 'EQL'}
           </span>
           <span className="font-mono text-terminal-text">{fmt.price(e.level)}</span>
-          <span className="text-terminal-muted ml-auto">×{e.count} touches</span>
+          <span className="text-terminal-muted ml-auto">×{e.count}</span>
         </div>
       ))}
     </div>
   )
 }
 
+// ---------------------------------------------------------------------------
+// Advanced signal components
+// ---------------------------------------------------------------------------
+
+function SweepAlert({ sweeps }) {
+  if (!sweeps?.length)
+    return <div className="text-terminal-muted text-xs italic">No sweeps detected yet — waiting</div>
+
+  return (
+    <div className="space-y-1.5">
+      {sweeps.slice(-5).reverse().map((s, i) => {
+        const isBull = s.direction === 'bullish'
+        return (
+          <div key={i} className={clsx(
+            'px-3 py-2 rounded border text-xs',
+            isBull ? 'border-terminal-green/40 bg-terminal-green/10' : 'border-terminal-red/40 bg-terminal-red/10'
+          )}>
+            <div className="flex items-center gap-2 mb-0.5">
+              {isBull ? <ArrowUpCircle size={12} className="text-terminal-green shrink-0"/>
+                      : <ArrowDownCircle size={12} className="text-terminal-red shrink-0"/>}
+              <span className={clsx('font-semibold', isBull ? 'text-terminal-green' : 'text-terminal-red')}>
+                {s.label}
+              </span>
+              <span className="font-mono text-terminal-muted ml-auto">{fmt.price(s.level)}</span>
+            </div>
+            <p className="text-terminal-muted leading-relaxed">{s.description}</p>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function MSSEvents({ events, structure }) {
+  const structureColor = structure === 'bullish' ? 'text-terminal-green'
+    : structure === 'bearish' ? 'text-terminal-red'
+    : structure?.includes('lean') ? 'text-terminal-yellow'
+    : 'text-terminal-muted'
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-terminal-muted">HTF Structure:</span>
+        <span className={clsx('font-semibold capitalize', structureColor)}>{structure || 'Unknown'}</span>
+      </div>
+      {!events?.length
+        ? <div className="text-terminal-muted text-xs italic">No MSS / CHoCH detected</div>
+        : events.slice(-4).reverse().map((e, i) => (
+          <div key={i} className={clsx('flex items-start gap-2 text-xs px-2 py-1.5 rounded border',
+            e.color === 'green' ? 'border-terminal-green/30 bg-terminal-green/5' : 'border-terminal-red/30 bg-terminal-red/5')}>
+            <span className={clsx('font-bold shrink-0 mt-px', e.color === 'green' ? 'text-terminal-green' : 'text-terminal-red')}>
+              {e.label}
+            </span>
+            <span className="text-terminal-muted leading-relaxed">{e.description}</span>
+          </div>
+        ))}
+    </div>
+  )
+}
+
+function OTEZone({ ote, currentPrice, inOte }) {
+  if (!ote) return <div className="text-terminal-muted text-xs italic">Insufficient swing data for OTE</div>
+  const isBull = ote.direction === 'bullish'
+  return (
+    <div className={clsx('space-y-2 p-3 rounded border',
+      inOte ? (isBull ? 'border-terminal-green/50 bg-terminal-green/10' : 'border-terminal-red/50 bg-terminal-red/10')
+             : 'border-terminal-border bg-terminal-card')}>
+      {inOte && (
+        <div className={clsx('flex items-center gap-1.5 text-xs font-bold',
+          isBull ? 'text-terminal-green' : 'text-terminal-red')}>
+          <Radio size={11} className="animate-pulse"/>
+          PRICE IN OTE ZONE — {isBull ? 'LONG ENTRY AREA' : 'SHORT ENTRY AREA'}
+        </div>
+      )}
+      <div className="text-xs space-y-1">
+        <div className="flex justify-between">
+          <span className="text-terminal-muted">Direction</span>
+          <span className={clsx('font-semibold capitalize', isBull ? 'text-terminal-green' : 'text-terminal-red')}>
+            {ote.direction}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-terminal-muted">OTE Zone</span>
+          <span className="font-mono text-terminal-text">
+            {fmt.price(ote.ote_bottom)} – {fmt.price(ote.ote_top)}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-terminal-muted">Equilibrium (0.5)</span>
+          <span className="font-mono text-terminal-yellow">{fmt.price(ote.equilibrium)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-terminal-muted">Leg Range</span>
+          <span className="font-mono text-terminal-muted">
+            {fmt.price(ote.leg_low)} → {fmt.price(ote.leg_high)}
+          </span>
+        </div>
+      </div>
+      {currentPrice && (
+        <div className="text-xs text-terminal-muted">{ote.description}</div>
+      )}
+    </div>
+  )
+}
+
+function IPDALevels({ levels }) {
+  if (!levels || !Object.keys(levels).length)
+    return <div className="text-terminal-muted text-xs italic">Need more historical bars for IPDA</div>
+
+  const periods = [20, 40, 60].filter(p => levels[`ipda_${p}d_high`])
+  return (
+    <div className="space-y-1">
+      {periods.map(p => (
+        <div key={p} className="text-xs">
+          <div className="text-terminal-muted font-semibold mb-0.5">{p}-Day IPDA</div>
+          <div className="flex gap-3">
+            <div className="flex justify-between flex-1 border-b border-terminal-border/20 py-0.5">
+              <span className="text-terminal-muted">High</span>
+              <span className="font-mono text-terminal-red">{fmt.price(levels[`ipda_${p}d_high`])}</span>
+            </div>
+            <div className="flex justify-between flex-1 border-b border-terminal-border/20 py-0.5">
+              <span className="text-terminal-muted">Low</span>
+              <span className="font-mono text-terminal-green">{fmt.price(levels[`ipda_${p}d_low`])}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SMTCard({ smt }) {
+  if (!smt?.detected)
+    return <div className="text-terminal-muted text-xs italic">No SMT divergence detected</div>
+  const isBull = smt.type === 'bullish_smt'
+  return (
+    <div className={clsx('px-3 py-2 rounded border text-xs',
+      isBull ? 'border-terminal-green/40 bg-terminal-green/10' : 'border-terminal-red/40 bg-terminal-red/10')}>
+      <div className={clsx('font-bold mb-1', isBull ? 'text-terminal-green' : 'text-terminal-red')}>
+        {smt.label}
+      </div>
+      <p className="text-terminal-muted leading-relaxed">{smt.description}</p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+const SYMBOLS = [
+  { value: 'QQQ', label: 'QQQ → MNQ', secondary: 'SPY' },
+  { value: 'SPY', label: 'SPY → MES', secondary: 'QQQ' },
+  { value: 'GC=F', label: 'Gold → MGC', secondary: 'SI=F' },
+]
+
 export default function ICT() {
-  const [symbol, setSymbol] = useState('QQQ')
+  const [symbolIdx, setSymbolIdx] = useState(0)
+  const sym = SYMBOLS[symbolIdx]
+
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ['ict-analysis', symbol],
-    queryFn: () => apiFetch(`/api/ict/analysis?symbol=${symbol}`),
+    queryKey: ['ict-analysis', sym.value],
+    queryFn: () => apiFetch(`/api/ict/analysis?symbol=${sym.value}`),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+
+  const { data: adv, isLoading: advLoading } = useQuery({
+    queryKey: ['ict-advanced', sym.value, sym.secondary],
+    queryFn: () => apiFetch(`/api/ict/advanced?symbol=${sym.value}&secondary=${sym.secondary}`),
     refetchInterval: 60_000,
     staleTime: 30_000,
   })
@@ -154,15 +358,34 @@ export default function ICT() {
   const summary = data?.summary || {}
   const sortedFvgs = [...fvgs].sort((a, b) => (b.inverted ? 1 : 0) - (a.inverted ? 1 : 0))
 
+  const po3 = adv?.po3_phase
+  const sweeps = adv?.liquidity_sweeps || []
+  const mss = adv?.mss_choch || {}
+  const ote = adv?.ote_zone
+  const inOte = adv?.in_ote || false
+  const ipda = adv?.ipda_levels || {}
+  const smt = adv?.smt_divergence || {}
+  const recentSweep = adv?.recent_sweep
+  const advBonus = adv?.advanced_score_bonus || 0
+
   return (
     <div className="space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold text-terminal-text">ICT / Smart Money</h1>
-          <select value={symbol} onChange={e => setSymbol(e.target.value)}
-            className="bg-terminal-card border border-terminal-border rounded px-2 py-1 text-xs text-terminal-text">
-            {['QQQ','SPY','NVDA','MSFT','AAPL','TSLA','AMD'].map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <div className="flex gap-1">
+            {SYMBOLS.map((s, i) => (
+              <button key={s.value} onClick={() => setSymbolIdx(i)}
+                className={clsx('px-2.5 py-1 rounded text-xs font-semibold border transition-colors',
+                  symbolIdx === i
+                    ? 'bg-terminal-blue/20 text-terminal-blue border-terminal-blue/40'
+                    : 'bg-terminal-card text-terminal-muted border-terminal-border hover:border-terminal-blue/30'
+                )}>
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {dataUpdatedAt && <span className="text-xs text-terminal-muted">{fmt.timeAgo(new Date(dataUpdatedAt).toISOString())}</span>}
@@ -172,40 +395,78 @@ export default function ICT() {
         </div>
       </div>
 
-      {isLoading ? <div className="h-10 rounded animate-pulse bg-terminal-border/20"/> : session && (
-        <div className="flex items-center gap-3 flex-wrap">
+      {/* Status row */}
+      {!isLoading && session && (
+        <div className="flex items-start gap-3 flex-wrap">
           <SessionBadge session={session.session} inKillzone={session.in_killzone} timeEt={session.time_et}/>
           {dp.zone && <ZonePill zone={dp.zone} pct={dp.position_pct}/>}
-          {dp.zone_note && <span className="text-xs text-terminal-muted italic hidden sm:block">{dp.zone_note}</span>}
-        </div>
-      )}
-      {session?.session_note && (
-        <div className="text-xs text-terminal-muted bg-terminal-card border border-terminal-border/50 rounded px-3 py-2">
-          {session.session_note}
+          {advBonus > 0 && (
+            <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-terminal-purple/20 text-terminal-purple border border-terminal-purple/30">
+              <Zap size={11}/> +{advBonus} advanced signal bonus
+            </div>
+          )}
         </div>
       )}
 
+      {/* PO3 Phase — most important context */}
+      {!advLoading && po3 && (
+        <PhaseBadge
+          phase={po3.phase}
+          label={po3.phase_label}
+          description={po3.description}
+          minutesSinceOpen={po3.minutes_since_open}
+        />
+      )}
+
+      {/* ── SWEEP ALERT — the main trigger ── */}
+      {recentSweep && (
+        <div className={clsx(
+          'px-4 py-3 rounded border-2 font-semibold text-sm flex items-center gap-3',
+          recentSweep.direction === 'bullish'
+            ? 'border-terminal-green bg-terminal-green/10 text-terminal-green'
+            : 'border-terminal-red bg-terminal-red/10 text-terminal-red'
+        )}>
+          <Radio size={16} className="animate-pulse shrink-0"/>
+          <div>
+            <div>SWEEP DETECTED — {recentSweep.label}</div>
+            <div className="text-xs font-normal opacity-80 mt-0.5">{recentSweep.description}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Main 3-column grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left: Session Levels + DOL + EHL */}
+
+        {/* ── LEFT: Levels + IPDA + DOL + EHL ── */}
         <div className="space-y-4">
           <div className="card">
             <div className="text-xs font-semibold text-terminal-muted uppercase mb-3">Session Levels</div>
-            {isLoading ? <div className="space-y-2">{Array.from({length:6}).map((_,i)=><div key={i} className="h-5 bg-terminal-border/20 rounded animate-pulse"/>)}</div>
-            : <div className="space-y-0.5">
-                <LevelRow label="Today High" value={levels.today_high} variant="green"/>
-                <LevelRow label="Today Low" value={levels.today_low} variant="red"/>
-                <LevelRow label="London High" value={levels.london_high} variant="yellow"/>
-                <LevelRow label="London Low" value={levels.london_low} variant="yellow"/>
-                <LevelRow label="Asia High" value={levels.asia_high} variant="blue"/>
-                <LevelRow label="Asia Low" value={levels.asia_low} variant="blue"/>
-                <LevelRow label="Pre-mkt High" value={levels.premarket_high} variant="muted"/>
-                <LevelRow label="Pre-mkt Low" value={levels.premarket_low} variant="muted"/>
-                <LevelRow label="Prev Day High" value={levels.prev_day_high} variant="muted"/>
-                <LevelRow label="Prev Day Low" value={levels.prev_day_low} variant="muted"/>
-                <LevelRow label="Prev Day Mid" value={levels.prev_day_mid} variant="muted"/>
-                <LevelRow label="Equilibrium" value={dp.equilibrium} variant="default"/>
-              </div>}
+            {isLoading
+              ? <div className="space-y-2">{Array.from({length:8}).map((_,i)=><div key={i} className="h-5 bg-terminal-border/20 rounded animate-pulse"/>)}</div>
+              : <div className="space-y-0">
+                  <LevelRow label="Today High" value={levels.today_high} variant="green"/>
+                  <LevelRow label="Today Low" value={levels.today_low} variant="red"/>
+                  <LevelRow label="London High" value={levels.london_high} variant="yellow"/>
+                  <LevelRow label="London Low" value={levels.london_low} variant="yellow"/>
+                  <LevelRow label="Asia High" value={levels.asia_high} variant="blue"/>
+                  <LevelRow label="Asia Low" value={levels.asia_low} variant="blue"/>
+                  <LevelRow label="Pre-mkt High" value={levels.premarket_high} variant="muted"/>
+                  <LevelRow label="Pre-mkt Low" value={levels.premarket_low} variant="muted"/>
+                  <LevelRow label="Prev Day High" value={levels.prev_day_high} variant="muted"/>
+                  <LevelRow label="Prev Day Low" value={levels.prev_day_low} variant="muted"/>
+                  <LevelRow label="Equilibrium" value={dp.equilibrium} variant="default"/>
+                </div>}
           </div>
+
+          <div className="card">
+            <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
+              <Layers size={12}/> IPDA Levels
+            </div>
+            {advLoading
+              ? <div className="h-16 bg-terminal-border/20 rounded animate-pulse"/>
+              : <IPDALevels levels={ipda}/>}
+          </div>
+
           <div className="card">
             <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
               <Target size={12}/> Draw on Liquidity
@@ -213,6 +474,7 @@ export default function ICT() {
             {isLoading ? <div className="h-8 bg-terminal-border/20 rounded animate-pulse"/>
             : <DrawArrow direction={draw.direction} target={draw.target} reason={draw.reason}/>}
           </div>
+
           <div className="card">
             <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
               <AlertTriangle size={12}/> Equal Highs / Lows
@@ -221,88 +483,153 @@ export default function ICT() {
           </div>
         </div>
 
-        {/* Middle: Setup grades + FVGs */}
+        {/* ── MIDDLE: Grades + Sweeps + MSS + iFVGs + FVGs ── */}
         <div className="space-y-4">
+
           {!isLoading && data?.long_setup && data?.short_setup && (
             <div className="grid grid-cols-2 gap-2">
               <SetupGrade grade={data.long_setup.grade} score={data.long_setup.score} checklist={data.long_setup.checklist} title="Long Setup"/>
               <SetupGrade grade={data.short_setup.grade} score={data.short_setup.score} checklist={data.short_setup.checklist} title="Short Setup"/>
             </div>
           )}
+
+          {/* Liquidity Sweeps — THE trigger */}
+          <div className="card">
+            <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
+              <Radio size={12} className={sweeps.length ? 'text-terminal-yellow animate-pulse' : ''}/>
+              Liquidity Sweeps ({sweeps.length})
+            </div>
+            {advLoading
+              ? <div className="h-10 bg-terminal-border/20 rounded animate-pulse"/>
+              : <SweepAlert sweeps={sweeps}/>}
+          </div>
+
+          {/* MSS / CHoCH */}
+          <div className="card">
+            <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
+              <Activity size={12}/> MSS / CHoCH
+            </div>
+            {advLoading
+              ? <div className="h-10 bg-terminal-border/20 rounded animate-pulse"/>
+              : <MSSEvents events={mss.events} structure={mss.last_structure}/>}
+          </div>
+
+          {/* iFVGs */}
           {ifvgs.length > 0 && (
             <div className="card border border-terminal-purple/30">
               <div className="text-xs font-semibold text-terminal-purple uppercase mb-2 flex items-center gap-2">
-                <Zap size={12}/> iFVGs — Active Entry Zones ({ifvgs.length})
+                <Zap size={12}/> iFVGs — Entry Zones ({ifvgs.length})
               </div>
               <div className="space-y-1">{ifvgs.map((f,i) => <FVGRow key={i} fvg={f}/>)}</div>
             </div>
           )}
+
+          {/* All FVGs */}
           <div className="card">
             <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center justify-between">
               <span>Fair Value Gaps</span>
-              <span className="font-normal text-terminal-muted">↑{summary.unfilled_bullish_fvgs||0} ↓{summary.unfilled_bearish_fvgs||0} total:{summary.total_fvgs||0}</span>
+              <span className="font-normal text-terminal-muted">
+                ↑{summary.unfilled_bullish_fvgs||0} ↓{summary.unfilled_bearish_fvgs||0} total:{summary.total_fvgs||0}
+              </span>
             </div>
-            {isLoading ? <div className="space-y-2">{Array.from({length:5}).map((_,i)=><div key={i} className="h-7 bg-terminal-border/20 rounded animate-pulse"/>)}</div>
-            : sortedFvgs.length === 0 ? <div className="text-terminal-muted text-xs italic">No FVGs detected</div>
-            : <div className="space-y-1 max-h-64 overflow-y-auto">{sortedFvgs.slice(-15).reverse().map((f,i) => <FVGRow key={i} fvg={f}/>)}</div>}
+            {isLoading
+              ? <div className="space-y-2">{Array.from({length:4}).map((_,i)=><div key={i} className="h-7 bg-terminal-border/20 rounded animate-pulse"/>)}</div>
+              : sortedFvgs.length === 0
+                ? <div className="text-terminal-muted text-xs italic">No FVGs detected</div>
+                : <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {sortedFvgs.slice(-12).reverse().map((f,i) => <FVGRow key={i} fvg={f}/>)}
+                  </div>}
           </div>
         </div>
 
-        {/* Right: Order Blocks + Reference */}
+        {/* ── RIGHT: OTE + SMT + OBs + Reference ── */}
         <div className="space-y-4">
+
+          {/* OTE Zone */}
+          <div className="card">
+            <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
+              <Target size={12}/> OTE Zone (0.618 – 0.786)
+            </div>
+            {advLoading
+              ? <div className="h-24 bg-terminal-border/20 rounded animate-pulse"/>
+              : <OTEZone ote={ote} currentPrice={adv?.current_price} inOte={inOte}/>}
+          </div>
+
+          {/* SMT Divergence */}
+          <div className="card">
+            <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
+              <Activity size={12}/> SMT Divergence ({sym.value} vs {sym.secondary})
+            </div>
+            {advLoading
+              ? <div className="h-10 bg-terminal-border/20 rounded animate-pulse"/>
+              : <SMTCard smt={smt}/>}
+          </div>
+
+          {/* Order Blocks */}
           <div className="card">
             <div className="text-xs font-semibold text-terminal-muted uppercase mb-3 flex items-center gap-2">
               <BarChart2 size={12}/> Order Blocks ({obs.length})
             </div>
-            {isLoading ? <div className="space-y-2">{Array.from({length:4}).map((_,i)=><div key={i} className="h-7 bg-terminal-border/20 rounded animate-pulse"/>)}</div>
-            : obs.length === 0 ? <div className="text-terminal-muted text-xs italic">No order blocks detected</div>
-            : <div className="space-y-1">{[...obs].reverse().map((ob,i) => {
-                const isBull = ob.type === 'bullish_ob'
-                return (
-                  <div key={i} className={clsx('flex items-center gap-2 text-xs px-2 py-1.5 rounded border',
-                    isBull ? 'border-terminal-green/30 bg-terminal-green/5' : 'border-terminal-red/30 bg-terminal-red/5')}>
-                    <span className={clsx('font-semibold shrink-0', isBull ? 'text-terminal-green' : 'text-terminal-red')}>
-                      {isBull ? 'BOB' : 'SOB'}
-                    </span>
-                    <span className="font-mono text-terminal-text">{fmt.price(ob.low)} – {fmt.price(ob.high)}</span>
-                    <span className="text-terminal-muted ml-auto">{isBull ? 'demand' : 'supply'}</span>
-                  </div>
-                )
-              })}</div>}
+            {isLoading
+              ? <div className="space-y-2">{Array.from({length:3}).map((_,i)=><div key={i} className="h-7 bg-terminal-border/20 rounded animate-pulse"/>)}</div>
+              : obs.length === 0
+                ? <div className="text-terminal-muted text-xs italic">No OBs detected</div>
+                : <div className="space-y-1">
+                    {[...obs].reverse().map((ob, i) => {
+                      const isBull = ob.type === 'bullish_ob'
+                      return (
+                        <div key={i} className={clsx('flex items-center gap-2 text-xs px-2 py-1.5 rounded border',
+                          isBull ? 'border-terminal-green/30 bg-terminal-green/5' : 'border-terminal-red/30 bg-terminal-red/5')}>
+                          <span className={clsx('font-semibold shrink-0', isBull ? 'text-terminal-green' : 'text-terminal-red')}>
+                            {isBull ? 'BOB' : 'SOB'}
+                          </span>
+                          <span className="font-mono text-terminal-text">{fmt.price(ob.low)} – {fmt.price(ob.high)}</span>
+                          <span className="text-terminal-muted ml-auto">{isBull ? 'demand' : 'supply'}</span>
+                        </div>
+                      )
+                    })}
+                  </div>}
           </div>
+
+          {/* Strategy reference */}
           <div className="card bg-terminal-card2 text-xs space-y-3">
-            <div className="text-terminal-text font-semibold text-sm">ICT Sweep & Inverse Model</div>
+            <div className="text-terminal-text font-semibold">A+ Setup Checklist</div>
             <div>
-              <div className="text-terminal-green font-semibold mb-1">A+ Long Setup</div>
+              <div className="text-terminal-green font-semibold mb-1">Long Entry</div>
               <div className="text-terminal-muted space-y-0.5">
-                <div>1. Price sweeps EQL or Asia/London Low</div>
-                <div>2. Strong bullish displacement candle</div>
-                <div>3. iFVG forms in displacement</div>
-                <div>4. Price returns to iFVG in NY Killzone</div>
-                <div>5. Target: EQH / session high / DOL</div>
+                <div>1. Sweep EQL / Asia Low / London Low</div>
+                <div>2. Strong bullish displacement (V-shape)</div>
+                <div>3. Mark iFVG on 30s / 1m / 2m / 3m</div>
+                <div>4. Enter when price returns to iFVG</div>
+                <div>5. Price in discount (&lt;50% daily range)</div>
+                <div>6. Target: EQH / session high / DOL</div>
+                <div>7. Stop: swing low of sweep</div>
               </div>
             </div>
             <div>
-              <div className="text-terminal-red font-semibold mb-1">A+ Short Setup</div>
+              <div className="text-terminal-red font-semibold mb-1">Short Entry</div>
               <div className="text-terminal-muted space-y-0.5">
-                <div>1. Price sweeps EQH or Asia/London High</div>
-                <div>2. Strong bearish displacement candle</div>
-                <div>3. iFVG forms in displacement</div>
-                <div>4. Price returns to iFVG in NY Killzone</div>
-                <div>5. Target: EQL / session low / DOL</div>
+                <div>1. Sweep EQH / Asia High / London High</div>
+                <div>2. Strong bearish displacement (V-shape)</div>
+                <div>3. Mark iFVG on 30s / 1m / 2m / 3m</div>
+                <div>4. Enter when price returns to iFVG</div>
+                <div>5. Price in premium (&gt;50% daily range)</div>
+                <div>6. Target: EQL / session low / DOL</div>
+                <div>7. Stop: swing high of sweep</div>
               </div>
             </div>
-            <div className="border-t border-terminal-border pt-2">
-              <div className="text-terminal-yellow font-semibold mb-1">No Trade Conditions</div>
+            <div className="border-t border-terminal-border pt-2 text-terminal-yellow">
+              <div className="font-semibold mb-1">No Trade</div>
               <div className="text-terminal-muted space-y-0.5">
                 <div>• Outside NY Killzone (9:30–11:30 AM ET)</div>
-                <div>• Friday after 11:30 AM / Monday pre-market</div>
-                <div>• Price at equilibrium (50% range) — no edge</div>
-                <div>• No clear draw on liquidity identified</div>
+                <div>• No sweep of a key level</div>
+                <div>• No clear opposing draw on liquidity</div>
+                <div>• Setup looks "okay" but not obvious</div>
               </div>
             </div>
           </div>
         </div>
+
       </div>
     </div>
   )
