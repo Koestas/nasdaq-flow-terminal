@@ -68,11 +68,15 @@ def _session_note(session: str) -> str:
     }.get(session, "")
 
 
-def extract_session_levels(bars: list) -> dict:
+def extract_session_levels(bars: list, reference_dt=None) -> dict:
     if not bars:
         return {}
 
-    today_et = datetime.now(NY_TZ).date()
+    if reference_dt is not None:
+        ny_ref = reference_dt.astimezone(NY_TZ)
+        today_et = ny_ref.date()
+    else:
+        today_et = datetime.now(NY_TZ).date()
     yesterday_et = today_et - timedelta(days=1)
     if today_et.weekday() == 0:
         yesterday_et = today_et - timedelta(days=3)
@@ -341,11 +345,17 @@ def score_setup(in_killzone, has_ifvg, in_discount_for_long, draw_aligned, has_o
     return {"score": score, "grade": grade, "checklist": checklist}
 
 
-def get_ict_analysis(bars: list, vwap: Optional[float] = None, current_price: Optional[float] = None) -> dict:
-    session = get_session_context()
+def get_ict_analysis(bars: list, vwap: Optional[float] = None, current_price: Optional[float] = None, reference_dt=None) -> dict:
+    if reference_dt is not None:
+        ny_dt = reference_dt.astimezone(NY_TZ)
+        m = ny_dt.hour * 60 + ny_dt.minute
+        in_kz = 9 * 60 + 30 <= m <= 11 * 60 + 30 and ny_dt.weekday() < 5
+        session = {**get_session_context(), "in_killzone": in_kz}
+    else:
+        session = get_session_context()
     fvgs = detect_fvg(bars)
     obs = detect_order_block(bars)
-    session_levels = extract_session_levels(bars)
+    session_levels = extract_session_levels(bars, reference_dt=reference_dt)
     equal_hl = detect_equal_highs_lows(bars)
     price = current_price or session_levels.get("current_price")
     dp = calc_discount_premium(session_levels, price)

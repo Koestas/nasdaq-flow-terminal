@@ -353,7 +353,7 @@ export default function Charts() {
             </span>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* OHLCV hover strip */}
       <div className="flex items-center gap-4 px-3 py-1.5 bg-terminal-card border border-terminal-border rounded text-xs font-mono h-8">

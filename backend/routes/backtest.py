@@ -99,7 +99,7 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
 
 # ── Per-day signal detection ──────────────────────────────────────────────────
 
-def _find_killzone_setup(day_bars: list, all_prior_bars: list) -> dict | None:
+def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ") -> dict | None:
     """
     Walk through the NY killzone bars one at a time; return the first
     setup that reaches grade A or A+ with a sweep + iFVG.
@@ -119,11 +119,12 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list) -> dict | None:
         # Use up to 200 prior bars + current killzone window for context
         context = (all_prior_bars + day_bars)[-200:] + kz_bars[:i]
 
-        sl  = extract_session_levels(context)
+        bar_dt   = _bar_dt(kz_bars[i - 1])
+        sl  = extract_session_levels(context, reference_dt=bar_dt)
         ehl = detect_equal_highs_lows(context)
         price = kz_bars[i - 1]["close"]
 
-        analysis = get_ict_analysis(context, current_price=price)
+        analysis = get_ict_analysis(context, current_price=price, reference_dt=bar_dt)
         long_sc  = analysis.get("long_setup",  {}).get("score", 0)
         short_sc = analysis.get("short_setup", {}).get("score", 0)
         bias     = ("bullish" if long_sc > short_sc
@@ -157,9 +158,13 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list) -> dict | None:
         # Build entry / stop / target in price units
         fvg     = min(aligned, key=lambda f: abs(f["mid"] - price))
         entry   = fvg["bottom"] if bias == "bullish" else fvg["top"]
-        config  = _INSTRUMENT_CONFIG.get("MNQ")  # use MNQ params for NQ=F
+        config  = _INSTRUMENT_CONFIG.get(instrument, _INSTRUMENT_CONFIG["MNQ"])
         buf     = config["stop_buffer"]
         min_st  = config["min_stop_pts"]
+
+        # Skip stale FVGs — price must be near the zone (within 3× the gap size)
+        if abs(price - fvg["mid"]) > fvg["size"] * 3 + min_st:
+            continue
 
         if bias == "bullish":
             raw_stop = (min(recent[-1].get("wick_low", recent[-1]["level"]),
@@ -176,8 +181,8 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list) -> dict | None:
         if dol_tgt and abs(dol_tgt - entry) > stop_dist:
             target = dol_tgt
         else:
-            target = (entry + 2.5 * stop_dist if bias == "bullish"
-                      else entry - 2.5 * stop_dist)
+            target = (entry + 2.0 * stop_dist if bias == "bullish"
+                      else entry - 2.0 * stop_dist)
 
         return {
             "bar_index": i,
@@ -237,7 +242,7 @@ async def run_backtest(
             prior_bars.extend(by_day[pd])
         prior_bars = prior_bars[-300:]  # keep last 300 bars as context
 
-        setup = _find_killzone_setup(day_bars, prior_bars)
+        setup = _find_killzone_setup(day_bars, prior_bars, instrument=instrument.upper())
         if not setup:
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
             continue
