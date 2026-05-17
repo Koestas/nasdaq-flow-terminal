@@ -158,8 +158,8 @@ async def market_chart(
 ):
     try:
         bars = get_chart_bars(symbol, interval, period)
-        # Futures (NQ=F, ES=F, GC=F) return empty on weekends for period='1d'; fall back to 5d
-        if not bars and period == "1d":
+        # Futures (NQ=F, ES=F, GC=F) sometimes return only 1 stale bar for period='1d'; fall back to 5d
+        if len(bars) < 10 and period == "1d":
             bars = get_chart_bars(symbol, interval, "5d")
 
         # For 1-day periods the dataset only contains today's bars, so
