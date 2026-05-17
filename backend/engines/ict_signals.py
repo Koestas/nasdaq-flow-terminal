@@ -592,9 +592,9 @@ def get_advanced_signals(
 # ---------------------------------------------------------------------------
 
 _INSTRUMENT_CONFIG = {
-    "MNQ": {"multiplier": 1.0, "dollars_per_point": 2.0, "tick_size": 0.25, "name": "Micro NQ"},
-    "MES": {"multiplier": 1.0, "dollars_per_point": 5.0, "tick_size": 0.25, "name": "Micro ES"},
-    "MGC": {"multiplier": 1.0, "dollars_per_point": 10.0, "tick_size": 0.1,  "name": "Micro Gold"},
+    "MNQ": {"multiplier": 1.0, "dollars_per_point": 2.0, "tick_size": 0.25, "stop_buffer": 10.0, "name": "Micro NQ"},
+    "MES": {"multiplier": 1.0, "dollars_per_point": 5.0, "tick_size": 0.25, "stop_buffer": 4.0,  "name": "Micro ES"},
+    "MGC": {"multiplier": 1.0, "dollars_per_point": 10.0, "tick_size": 0.1,  "stop_buffer": 3.0,  "name": "Micro Gold"},
 }
 
 
@@ -616,9 +616,10 @@ def calc_auto_trade_setup(
     if not config:
         return {"error": f"Unknown instrument: {instrument}"}
 
-    multiplier = config["multiplier"]
-    usd_per_pt = config["dollars_per_point"]
-    tick = config["tick_size"]
+    multiplier  = config["multiplier"]
+    usd_per_pt  = config["dollars_per_point"]
+    tick        = config["tick_size"]
+    stop_buffer = config["stop_buffer"]
 
     def to_ticks(v):
         return round(round(v / tick) * tick, 4)
@@ -668,22 +669,35 @@ def calc_auto_trade_setup(
             entry_proxy = current_price
             entry_note = "Using current price — no iFVG or OTE identified yet"
 
-    # ---- Stop from sweep wick (proxy price units) ----
-    sweep_buffer = 0.10  # ~4 MNQ ticks of buffer beyond sweep wick
-    if recent_sweep:
-        if direction == "bullish":
-            wick = recent_sweep.get("wick_low") or recent_sweep.get("level")
-            stop_proxy = round((wick or entry_proxy) - sweep_buffer, 2)
-        else:
-            wick = recent_sweep.get("wick_high") or recent_sweep.get("level")
-            stop_proxy = round((wick or entry_proxy) + sweep_buffer, 2)
-    elif entry_fvg:
-        if direction == "bullish":
-            stop_proxy = round(entry_fvg["bottom"] - sweep_buffer, 2)
-        else:
-            stop_proxy = round(entry_fvg["top"] + sweep_buffer, 2)
+    # ---- Stop placement ----
+    # LONG:  stop must be strictly BELOW entry — use min(sweep_wick_low, iFVG_bottom) - buffer
+    # SHORT: stop must be strictly ABOVE entry — use max(sweep_wick_high, iFVG_top) + buffer
+    if direction == "bullish":
+        candidates = []
+        if recent_sweep:
+            w = recent_sweep.get("wick_low") or recent_sweep.get("level")
+            if w is not None:
+                candidates.append(w)
+        if entry_fvg:
+            candidates.append(entry_fvg["bottom"])
+        raw_stop = min(candidates) if candidates else entry_proxy
+        stop_proxy = round(raw_stop - stop_buffer, 2)
+        # Safety: must be below entry
+        if stop_proxy >= entry_proxy:
+            stop_proxy = round(entry_proxy - stop_buffer, 2)
     else:
-        stop_proxy = round(entry_proxy * (0.995 if direction == "bullish" else 1.005), 2)
+        candidates = []
+        if recent_sweep:
+            w = recent_sweep.get("wick_high") or recent_sweep.get("level")
+            if w is not None:
+                candidates.append(w)
+        if entry_fvg:
+            candidates.append(entry_fvg["top"])
+        raw_stop = max(candidates) if candidates else entry_proxy
+        stop_proxy = round(raw_stop + stop_buffer, 2)
+        # Safety: must be above entry
+        if stop_proxy <= entry_proxy:
+            stop_proxy = round(entry_proxy + stop_buffer, 2)
 
     stop_dist_proxy = round(abs(entry_proxy - stop_proxy), 4)
     if stop_dist_proxy <= 0:
