@@ -63,16 +63,16 @@ function StatRow({ label, value, sub, highlight }) {
 
 export default function Risk() {
   const [balance, setBalance] = useState('25000')
-  const [highest, setHighest] = useState('')
+  const [prevClose, setPrevClose] = useState('')
   const [instrument, setInstrument] = useState('MNQ')
   const [stopPts, setStopPts] = useState('')
-  const [submitted, setSubmitted] = useState({ balance: 25000, highest: null })
+  const [submitted, setSubmitted] = useState({ balance: 25000, prevClose: null })
 
   const { data: account, isLoading, refetch } = useQuery({
     queryKey: ['risk-account', submitted],
     queryFn: () => {
       const params = new URLSearchParams({ balance: submitted.balance })
-      if (submitted.highest) params.set('highest', submitted.highest)
+      if (submitted.prevClose) params.set('prev_close', submitted.prevClose)
       return apiFetch(`/api/risk/account?${params}`)
     },
     refetchInterval: 30000,
@@ -87,7 +87,7 @@ export default function Risk() {
         instrument,
         stop_points: stopPts,
       })
-      if (submitted.highest) params.set('highest', submitted.highest)
+      if (submitted.prevClose) params.set('prev_close', submitted.prevClose)
       return apiFetch(`/api/risk/size?${params}`)
     },
     enabled: !!stopPts && !isNaN(parseFloat(stopPts)),
@@ -95,9 +95,9 @@ export default function Risk() {
 
   const handleSubmit = useCallback(() => {
     const b = parseFloat(balance)
-    const h = highest ? parseFloat(highest) : null
-    if (!isNaN(b)) setSubmitted({ balance: b, highest: h })
-  }, [balance, highest])
+    const pc = prevClose ? parseFloat(prevClose) : null
+    if (!isNaN(b)) setSubmitted({ balance: b, prevClose: pc })
+  }, [balance, prevClose])
 
   const status = account?.status_color || 'green'
   const plan = account?.trade_plan
@@ -129,11 +129,11 @@ export default function Risk() {
             />
           </div>
           <div className="flex-1 min-w-[160px]">
-            <label className="text-xs text-terminal-muted mb-1 block">Session High ($) — optional</label>
+            <label className="text-xs text-terminal-muted mb-1 block">Yesterday's Close ($) — optional</label>
             <input
               type="number"
-              value={highest}
-              onChange={e => setHighest(e.target.value)}
+              value={prevClose}
+              onChange={e => setPrevClose(e.target.value)}
               className="w-full bg-terminal-bg border border-terminal-border rounded px-3 py-2 text-terminal-text text-sm font-mono focus:outline-none focus:border-terminal-blue"
               placeholder="same as balance"
             />
@@ -167,7 +167,7 @@ export default function Risk() {
 
             <div className="pt-2">
               <ProgressBar
-                value={account.daily_loss_limit - account.daily_risk_remaining || 0}
+                value={(account.rules?.daily_loss_limit || 1000) - account.daily_risk_remaining || 0}
                 max={account.rules?.daily_loss_limit || 1000}
                 color={account.daily_risk_remaining < 300 ? 'red' : account.daily_risk_remaining < 600 ? 'yellow' : 'green'}
                 label="Daily loss limit used"

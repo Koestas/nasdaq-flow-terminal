@@ -5,7 +5,8 @@ import {
   Clock, Target, TrendingUp, TrendingDown, Minus,
   AlertTriangle, CheckCircle, XCircle, Zap, BarChart2,
   RefreshCw, ChevronDown, ChevronUp, Activity, Layers,
-  ArrowUpCircle, ArrowDownCircle, Radio, Ban, Crosshair
+  ArrowUpCircle, ArrowDownCircle, Radio, Ban, Crosshair,
+  Calculator, ShieldAlert
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -480,14 +481,175 @@ function ConfluenceDecision({ session, dp, draw, ifvgs, adv, data }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Auto Trade Setup Card
+// ---------------------------------------------------------------------------
+
+function TradeSetupCard({ setup, symbol, instrument, isLoading, balance, setBalance, prevClose, setPrevClose, onRecalc }) {
+  const [showInputs, setShowInputs] = useState(false)
+
+  if (isLoading) {
+    return (
+      <div className="card border border-terminal-border animate-pulse">
+        <div className="h-24 bg-terminal-border/20 rounded"/>
+      </div>
+    )
+  }
+
+  const hasSetup = setup && !setup.error && setup.entry_inst != null
+
+  if (!hasSetup) {
+    return (
+      <div className="card border border-terminal-border/40">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Calculator size={14} className="text-terminal-blue"/>
+            <span className="text-xs font-semibold text-terminal-muted uppercase">Auto Trade Setup</span>
+          </div>
+          <button onClick={() => setShowInputs(s => !s)} className="text-xs text-terminal-muted hover:text-terminal-blue">
+            {showInputs ? 'hide' : 'set account'}
+          </button>
+        </div>
+        {showInputs && <AccountInputs balance={balance} setBalance={setBalance} prevClose={prevClose} setPrevClose={setPrevClose} onRecalc={onRecalc}/>}
+        <div className="text-terminal-muted text-xs italic mt-1">
+          {setup?.note || setup?.error || 'No trade setup — need sweep + iFVG first'}
+        </div>
+      </div>
+    )
+  }
+
+  const isLong = setup.direction === 'bullish'
+  const dirColor = isLong ? 'text-terminal-green' : 'text-terminal-red'
+  const dirBorder = isLong ? 'border-terminal-green/50 bg-terminal-green/5' : 'border-terminal-red/50 bg-terminal-red/5'
+
+  return (
+    <div className={clsx('card border-2 space-y-3', dirBorder)}>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          {isLong
+            ? <ArrowUpCircle size={20} className="text-terminal-green"/>
+            : <ArrowDownCircle size={20} className="text-terminal-red"/>}
+          <div>
+            <div className={clsx('text-base font-bold', dirColor)}>
+              {isLong ? 'LONG' : 'SHORT'} {instrument}
+            </div>
+            <div className="text-xs text-terminal-muted">{setup.instrument_name} · ${setup.usd_per_point}/pt · {symbol} proxy</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <div className="text-xs text-terminal-muted">R:R</div>
+            <div className="font-mono font-bold text-terminal-yellow text-lg">{setup.rr_ratio}R</div>
+          </div>
+          <button onClick={() => setShowInputs(s => !s)} className="text-xs text-terminal-muted hover:text-terminal-blue px-2 py-1 rounded border border-terminal-border/50">
+            {showInputs ? '▲' : '⚙'}
+          </button>
+        </div>
+      </div>
+
+      {/* Account inputs (collapsible) */}
+      {showInputs && (
+        <AccountInputs balance={balance} setBalance={setBalance} prevClose={prevClose} setPrevClose={setPrevClose} onRecalc={onRecalc}/>
+      )}
+
+      {/* Entry / Stop / Target — big numbers */}
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-border/50">
+          <div className="text-xs text-terminal-muted mb-1">ENTRY</div>
+          <div className="font-mono font-bold text-terminal-blue text-xl">{setup.entry_inst}</div>
+          <div className="text-xs text-terminal-muted mt-0.5">{instrument} pts</div>
+          <div className="text-xs text-terminal-muted opacity-60">{symbol} ${setup.entry_proxy}</div>
+        </div>
+        <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-red/30">
+          <div className="text-xs text-terminal-red mb-1">STOP</div>
+          <div className="font-mono font-bold text-terminal-red text-xl">{setup.stop_inst}</div>
+          <div className="text-xs text-terminal-muted mt-0.5">{setup.stop_dist_inst} pts risk</div>
+          <div className="text-xs text-terminal-muted opacity-60">{symbol} ${setup.stop_proxy}</div>
+        </div>
+        <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-green/30">
+          <div className="text-xs text-terminal-green mb-1">TARGET</div>
+          <div className="font-mono font-bold text-terminal-green text-xl">{setup.target_inst}</div>
+          <div className="text-xs text-terminal-muted mt-0.5">{setup.target_dist_inst} pts gain</div>
+          <div className="text-xs text-terminal-muted opacity-60">{symbol} ${setup.target_proxy}</div>
+        </div>
+      </div>
+
+      {/* Sizing strip */}
+      <div className="flex items-center gap-3 px-3 py-2 rounded bg-terminal-bg border border-terminal-border/50 text-sm">
+        <ShieldAlert size={14} className="text-terminal-yellow shrink-0"/>
+        <span className="font-mono font-semibold text-terminal-text">{setup.contracts} contract{setup.contracts !== 1 ? 's' : ''}</span>
+        <span className="text-terminal-muted">·</span>
+        <span className="font-mono text-terminal-red">${setup.risk_amount} risk</span>
+        <span className="text-terminal-muted">·</span>
+        <span className="text-xs text-terminal-muted truncate">{setup.entry_note}</span>
+      </div>
+
+      {/* Breakeven */}
+      <div className="px-3 py-2 rounded bg-terminal-yellow/10 border border-terminal-yellow/30 text-xs">
+        <span className="font-semibold text-terminal-yellow">Breakeven: </span>
+        <span className="text-terminal-text">
+          Move SL to <span className="font-mono">{setup.entry_inst}</span> when price reaches{' '}
+          <span className="font-mono font-bold">{setup.breakeven_trigger_inst}</span>
+        </span>
+      </div>
+
+      {/* TP levels */}
+      <div>
+        <div className="text-xs text-terminal-muted mb-2">Take Profit Levels</div>
+        <div className="grid grid-cols-4 gap-1.5">
+          {Object.entries(setup.tp_levels || {}).map(([label, tp]) => (
+            <div key={label} className="bg-terminal-bg rounded p-2 border border-terminal-border/50 text-center">
+              <div className="text-xs text-terminal-muted">{label}</div>
+              <div className="font-mono font-bold text-terminal-green text-sm">{tp.price_inst}</div>
+              <div className="text-xs text-terminal-muted">+{tp.pts}pts</div>
+              <div className="text-xs text-terminal-green">+${tp.total_gain}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Context note */}
+      {setup.target_note && (
+        <div className="text-xs text-terminal-muted italic">{setup.target_note}</div>
+      )}
+    </div>
+  )
+}
+
+function AccountInputs({ balance, setBalance, prevClose, setPrevClose, onRecalc }) {
+  return (
+    <div className="flex gap-2 flex-wrap items-end p-2 bg-terminal-bg rounded border border-terminal-border/50">
+      <div>
+        <label className="text-xs text-terminal-muted block mb-1">Balance ($)</label>
+        <input type="number" value={balance} onChange={e => setBalance(e.target.value)}
+          className="w-28 bg-terminal-card border border-terminal-border rounded px-2 py-1 text-xs font-mono text-terminal-text focus:outline-none focus:border-terminal-blue"
+          placeholder="25000"/>
+      </div>
+      <div>
+        <label className="text-xs text-terminal-muted block mb-1">Yesterday's Close ($)</label>
+        <input type="number" value={prevClose} onChange={e => setPrevClose(e.target.value)}
+          className="w-28 bg-terminal-card border border-terminal-border rounded px-2 py-1 text-xs font-mono text-terminal-text focus:outline-none focus:border-terminal-blue"
+          placeholder="same as balance"/>
+      </div>
+      <button onClick={onRecalc} className="px-3 py-1 text-xs bg-terminal-blue/20 text-terminal-blue border border-terminal-blue/40 rounded font-semibold hover:bg-terminal-blue/30">
+        Recalculate
+      </button>
+    </div>
+  )
+}
+
 const SYMBOLS = [
-  { value: 'QQQ', label: 'QQQ → MNQ', secondary: 'SPY' },
-  { value: 'SPY', label: 'SPY → MES', secondary: 'QQQ' },
-  { value: 'GC=F', label: 'Gold → MGC', secondary: 'SI=F' },
+  { value: 'QQQ', label: 'QQQ → MNQ', secondary: 'SPY', instrument: 'MNQ' },
+  { value: 'SPY', label: 'SPY → MES', secondary: 'QQQ', instrument: 'MES' },
+  { value: 'GC=F', label: 'Gold → MGC', secondary: 'SI=F', instrument: 'MGC' },
 ]
 
 export default function ICT() {
   const [symbolIdx, setSymbolIdx] = useState(0)
+  const [tradeBalance, setTradeBalance] = useState('25000')
+  const [tradePrevClose, setTradePrevClose] = useState('')
+  const [tradeKey, setTradeKey] = useState(0)
   const sym = SYMBOLS[symbolIdx]
 
   const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
@@ -500,6 +662,21 @@ export default function ICT() {
   const { data: adv, isLoading: advLoading } = useQuery({
     queryKey: ['ict-advanced', sym.value, sym.secondary],
     queryFn: () => apiFetch(`/api/ict/advanced?symbol=${sym.value}&secondary=${sym.secondary}`),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+
+  const { data: tradeSetupData, isLoading: tradeLoading } = useQuery({
+    queryKey: ['ict-trade-setup', sym.value, sym.instrument, tradeBalance, tradePrevClose, tradeKey],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        symbol: sym.value,
+        instrument: sym.instrument,
+        balance: tradeBalance || '25000',
+      })
+      if (tradePrevClose) params.set('prev_close', tradePrevClose)
+      return apiFetch(`/api/ict/trade-setup?${params}`)
+    },
     refetchInterval: 60_000,
     staleTime: 30_000,
   })
@@ -586,6 +763,19 @@ export default function ICT() {
           data={data}
         />
       )}
+
+      {/* ── AUTO TRADE SETUP — entry/stop/target/sizing ── */}
+      <TradeSetupCard
+        setup={tradeSetupData?.setup}
+        symbol={sym.value}
+        instrument={sym.instrument}
+        isLoading={tradeLoading}
+        balance={tradeBalance}
+        setBalance={setTradeBalance}
+        prevClose={tradePrevClose}
+        setPrevClose={setTradePrevClose}
+        onRecalc={() => setTradeKey(k => k + 1)}
+      />
 
       {/* ── SWEEP ALERT — the main trigger ── */}
       {recentSweep && (

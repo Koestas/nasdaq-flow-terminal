@@ -18,24 +18,24 @@ SAFE_AFTER_PAYOUT = 26_500.0      # balance must stay above this after payout
 SAFE_PAYOUT_TRIGGER = SAFE_AFTER_PAYOUT + MAX_PAYOUT  # 28,000
 
 
-def calc_trailing_floor(highest_balance: float) -> float:
-    """Trailing max-loss floor. Follows balance up but never exceeds TRAIL_FLOOR_STOPS_AT."""
-    floor = highest_balance - DAILY_LOSS_LIMIT
+def calc_trailing_floor(prev_close_balance: float) -> float:
+    """EOD trailing max-loss floor. Trails yesterday's close, locks at TRAIL_FLOOR_STOPS_AT."""
+    floor = prev_close_balance - DAILY_LOSS_LIMIT
     return min(floor, TRAIL_FLOOR_STOPS_AT)
 
 
-def calc_account_status(current_balance: float, highest_balance: Optional[float] = None) -> dict:
+def calc_account_status(current_balance: float, prev_close_balance: Optional[float] = None) -> dict:
     """
     Full account status for the risk manager.
 
     Args:
         current_balance: Current P&L-adjusted balance
-        highest_balance: Session high (defaults to current_balance if not provided)
+        prev_close_balance: Yesterday's EOD closing balance (EOD trailing drawdown baseline)
     """
-    if highest_balance is None:
-        highest_balance = current_balance
+    if prev_close_balance is None:
+        prev_close_balance = current_balance
 
-    floor = calc_trailing_floor(highest_balance)
+    floor = calc_trailing_floor(prev_close_balance)
     daily_risk_remaining = current_balance - floor
     daily_pnl = current_balance - STARTING_BALANCE
 
@@ -73,7 +73,7 @@ def calc_account_status(current_balance: float, highest_balance: Optional[float]
 
     return {
         "current_balance": round(current_balance, 2),
-        "highest_balance": round(highest_balance, 2),
+        "prev_close_balance": round(prev_close_balance, 2),
         "trailing_floor": round(floor, 2),
         "daily_pnl": round(daily_pnl, 2),
         "daily_risk_remaining": round(daily_risk_remaining, 2),
@@ -107,8 +107,8 @@ def size_position(
     instrument: str,
     stop_points: float,
     account_status: dict,
-    risk_per_trade_pct: float = 0.3,  # % of daily risk remaining per trade
-    max_risk_per_trade: float = 300.0,
+    risk_per_trade_pct: float = 0.15,  # % of daily risk remaining per trade
+    max_risk_per_trade: float = 150.0,
 ) -> dict:
     """
     Calculate position size for a given instrument and stop distance.
@@ -179,7 +179,7 @@ def daily_trade_plan(account_status: dict, instrument: str = "MNQ") -> dict:
         return {"recommendation": "Extreme caution. 1 trade max. Reduce size by 50%.", "max_trades": 1}
 
     # How many trades at standard size can we take?
-    risk_per_trade = min(remaining * 0.3, 300)
+    risk_per_trade = min(remaining * 0.15, 150)
     max_trades = int(remaining / risk_per_trade) if risk_per_trade > 0 else 0
     daily_goal = min(300, to_trigger) if to_trigger > 0 else 300
 

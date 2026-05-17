@@ -585,3 +585,199 @@ def get_advanced_signals(
             "smt": smt.get("type"),
         }
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto Trade Setup — entry / stop / target / sizing in instrument-native units
+# ---------------------------------------------------------------------------
+
+_INSTRUMENT_CONFIG = {
+    "MNQ": {"multiplier": 44.0, "dollars_per_point": 2.0, "tick_size": 0.25, "name": "Micro NQ"},
+    "MES": {"multiplier": 10.0, "dollars_per_point": 5.0, "tick_size": 0.25, "name": "Micro ES"},
+    "MGC": {"multiplier": 1.0,  "dollars_per_point": 10.0, "tick_size": 0.1,  "name": "Micro Gold"},
+}
+
+
+def calc_auto_trade_setup(
+    bars: list,
+    fvgs: list,
+    advanced_signals: dict,
+    dol: dict,
+    instrument: str,
+    account_status: dict,
+    bias_direction: str = "neutral",
+) -> dict:
+    """
+    Derive a complete trade setup from ICT signals and size it against the account.
+
+    All levels returned in both proxy (QQQ/SPY) and instrument-native (MNQ/MES/MGC) units.
+    """
+    config = _INSTRUMENT_CONFIG.get(instrument.upper())
+    if not config:
+        return {"error": f"Unknown instrument: {instrument}"}
+
+    multiplier = config["multiplier"]
+    usd_per_pt = config["dollars_per_point"]
+    tick = config["tick_size"]
+
+    def to_ticks(v):
+        return round(round(v / tick) * tick, 4)
+
+    # Current price in proxy units
+    current_price = advanced_signals.get("current_price")
+    if not current_price:
+        return {"error": "No current price data"}
+
+    # ---- Direction ----
+    sweeps = advanced_signals.get("liquidity_sweeps", [])
+    recent_sweep = sweeps[-1] if sweeps else None
+    direction = recent_sweep.get("direction", bias_direction) if recent_sweep else bias_direction
+
+    if direction == "neutral":
+        return {
+            "setup": None,
+            "direction": "neutral",
+            "note": "No directional bias — wait for a sweep or MSS before sizing",
+        }
+
+    # ---- Entry from iFVG (proxy price units) ----
+    ifvgs = [f for f in fvgs if f.get("type") == "ifvg"]
+    entry_fvg = None
+    if direction == "bullish":
+        aligned = [f for f in ifvgs if f.get("base_type") == "bullish_fvg"]
+        if aligned:
+            entry_fvg = min(aligned, key=lambda f: abs(f["mid"] - current_price))
+            entry_proxy = entry_fvg["bottom"]
+            entry_note = f"iFVG zone {entry_fvg['bottom']:.2f}–{entry_fvg['top']:.2f} (enter at bottom)"
+    else:
+        aligned = [f for f in ifvgs if f.get("base_type") == "bearish_fvg"]
+        if aligned:
+            entry_fvg = min(aligned, key=lambda f: abs(f["mid"] - current_price))
+            entry_proxy = entry_fvg["top"]
+            entry_note = f"iFVG zone {entry_fvg['bottom']:.2f}–{entry_fvg['top']:.2f} (enter at top)"
+
+    if entry_fvg is None:
+        ote = advanced_signals.get("ote_zone")
+        if ote:
+            entry_proxy = ote["ote_top"] if direction == "bullish" else ote["ote_bottom"]
+            entry_note = f"OTE zone entry ({entry_proxy:.2f}) — no iFVG available"
+        else:
+            entry_proxy = current_price
+            entry_note = "Using current price — no iFVG or OTE identified yet"
+
+    # ---- Stop from sweep wick (proxy price units) ----
+    sweep_buffer = 0.10  # ~4 MNQ ticks of buffer beyond sweep wick
+    if recent_sweep:
+        if direction == "bullish":
+            wick = recent_sweep.get("wick_low") or recent_sweep.get("level")
+            stop_proxy = round((wick or entry_proxy) - sweep_buffer, 2)
+        else:
+            wick = recent_sweep.get("wick_high") or recent_sweep.get("level")
+            stop_proxy = round((wick or entry_proxy) + sweep_buffer, 2)
+    elif entry_fvg:
+        if direction == "bullish":
+            stop_proxy = round(entry_fvg["bottom"] - sweep_buffer, 2)
+        else:
+            stop_proxy = round(entry_fvg["top"] + sweep_buffer, 2)
+    else:
+        stop_proxy = round(entry_proxy * (0.995 if direction == "bullish" else 1.005), 2)
+
+    stop_dist_proxy = round(abs(entry_proxy - stop_proxy), 4)
+    if stop_dist_proxy <= 0:
+        stop_dist_proxy = 0.5
+
+    # ---- Target from DOL (proxy price units) ----
+    dol_target = dol.get("target") if dol else None
+    if dol_target and abs(dol_target - entry_proxy) > stop_dist_proxy:
+        target_proxy = dol_target
+        target_note = dol.get("reason", "Draw on liquidity")
+    else:
+        target_proxy = round(
+            entry_proxy + 2.5 * stop_dist_proxy if direction == "bullish"
+            else entry_proxy - 2.5 * stop_dist_proxy,
+            2
+        )
+        target_note = "2.5R fallback target (no DOL identified)"
+
+    reward_dist_proxy = round(abs(target_proxy - entry_proxy), 4)
+    rr_ratio = round(reward_dist_proxy / stop_dist_proxy, 2) if stop_dist_proxy > 0 else 0
+
+    # ---- Convert to instrument-native points ----
+    entry_inst  = to_ticks(entry_proxy  * multiplier)
+    stop_inst   = to_ticks(stop_proxy   * multiplier)
+    target_inst = to_ticks(target_proxy * multiplier)
+    stop_dist_inst   = round(stop_dist_proxy   * multiplier, 2)
+    reward_dist_inst = round(reward_dist_proxy  * multiplier, 2)
+
+    if direction == "bullish":
+        be_trigger_inst  = to_ticks(entry_inst + stop_dist_inst)
+    else:
+        be_trigger_inst  = to_ticks(entry_inst - stop_dist_inst)
+
+    # ---- Position sizing ----
+    daily_risk_remaining = account_status.get("daily_risk_remaining", 0)
+    if daily_risk_remaining <= 0:
+        contracts, risk_amount = 0, 0.0
+        size_note = "No daily risk remaining — stop trading today"
+    else:
+        budget = min(daily_risk_remaining * 0.15, 150.0, daily_risk_remaining * 0.5)
+        risk_per_contract = stop_dist_inst * usd_per_pt
+        contracts = max(1, int(budget / risk_per_contract)) if risk_per_contract > 0 else 1
+        risk_amount = round(contracts * risk_per_contract, 2)
+        size_note = f"{contracts} {instrument.upper()} · ${risk_amount:.0f} risk · stop {stop_dist_inst:.1f} pts"
+
+    # ---- TP grid ----
+    tp_levels = {}
+    for r_val, label in [(1.5, "1.5R"), (2.0, "2R"), (2.5, "2.5R"), (3.0, "3R")]:
+        tp_pts = round(stop_dist_inst * r_val, 2)
+        if direction == "bullish":
+            tp_price_inst  = to_ticks(entry_inst + tp_pts)
+            tp_price_proxy = round(entry_proxy + stop_dist_proxy * r_val, 2)
+        else:
+            tp_price_inst  = to_ticks(entry_inst - tp_pts)
+            tp_price_proxy = round(entry_proxy - stop_dist_proxy * r_val, 2)
+        tp_levels[label] = {
+            "pts": tp_pts,
+            "price_inst": tp_price_inst,
+            "price_proxy": tp_price_proxy,
+            "gain_per_contract": round(tp_pts * usd_per_pt, 2),
+            "total_gain": round(tp_pts * usd_per_pt * max(contracts, 1), 2),
+        }
+
+    return {
+        "direction": direction,
+        "instrument": instrument.upper(),
+        "instrument_name": config["name"],
+        "usd_per_point": usd_per_pt,
+        "multiplier": multiplier,
+        # Proxy prices (QQQ / SPY / GC=F)
+        "entry_proxy": round(entry_proxy, 2),
+        "stop_proxy": round(stop_proxy, 2),
+        "target_proxy": round(target_proxy, 2),
+        "stop_dist_proxy": round(stop_dist_proxy, 2),
+        # Instrument-native levels
+        "entry_inst": entry_inst,
+        "stop_inst": stop_inst,
+        "target_inst": target_inst,
+        "stop_dist_inst": stop_dist_inst,
+        "target_dist_inst": reward_dist_inst,
+        "breakeven_trigger_inst": be_trigger_inst,
+        # Risk & sizing
+        "rr_ratio": rr_ratio,
+        "contracts": contracts,
+        "risk_amount": risk_amount,
+        "size_note": size_note,
+        # TP levels
+        "tp_levels": tp_levels,
+        # Context
+        "entry_note": entry_note,
+        "target_note": target_note,
+        "sweep_detected": bool(recent_sweep),
+        "fvg_zone": {"top": entry_fvg["top"], "bottom": entry_fvg["bottom"]} if entry_fvg else None,
+        "trade_note": (
+            f"{direction.upper()} {instrument.upper()} · "
+            f"Entry {entry_inst} · SL {stop_inst} · TP {target_inst} · "
+            f"{contracts} contract{'s' if contracts != 1 else ''} · "
+            f"${risk_amount:.0f} risk · {rr_ratio:.1f}R"
+        ),
+    }

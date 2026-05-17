@@ -8,9 +8,9 @@ router = APIRouter(prefix="/api/risk", tags=["risk"])
 @router.get("/account")
 async def account_status(
     balance: float = Query(25000.0, description="Current account balance"),
-    highest: float = Query(None, description="Session highest balance (defaults to balance)"),
+    prev_close: float = Query(None, description="Yesterday's EOD closing balance (EOD trailing drawdown baseline)"),
 ):
-    status = calc_account_status(balance, highest)
+    status = calc_account_status(balance, prev_close)
     plan = daily_trade_plan(status)
     return {**status, "trade_plan": plan}
 
@@ -20,11 +20,11 @@ async def position_size(
     instrument: str = Query("MNQ", description="MNQ, MES, or MGC"),
     stop_points: float = Query(..., description="Stop distance in points"),
     balance: float = Query(25000.0),
-    highest: float = Query(None),
-    risk_pct: float = Query(0.3, description="Fraction of daily risk remaining to use per trade"),
-    max_risk: float = Query(300.0, description="Absolute max risk per trade in dollars"),
+    prev_close: float = Query(None),
+    risk_pct: float = Query(0.15, description="Fraction of daily risk remaining to use per trade"),
+    max_risk: float = Query(150.0, description="Absolute max risk per trade in dollars"),
 ):
-    status = calc_account_status(balance, highest)
+    status = calc_account_status(balance, prev_close)
     sizing = size_position(
         instrument=instrument,
         stop_points=stop_points,
@@ -57,9 +57,9 @@ async def instruments():
 @router.get("/payout")
 async def payout_status(
     balance: float = Query(25000.0),
-    highest: float = Query(None),
+    prev_close: float = Query(None),
 ):
-    status = calc_account_status(balance, highest)
+    status = calc_account_status(balance, prev_close)
     return {
         "current_balance": status["current_balance"],
         "payout_ready": status["payout_ready"],
