@@ -210,26 +210,30 @@ export default function Charts() {
       }
     }
 
-    // FVGs — only the 2 most recent unfilled per direction (4 lines max total)
+    // FVGs — only the most recent unfilled per direction (2 lines per side max)
     if (overlays.fvg) {
       const unfilled = (ictData.fair_value_gaps || []).filter((f) => !f.filled && !f.inverted)
-      const recentBull = unfilled.filter((f) => f.type === 'bullish').slice(-1)
-      const recentBear = unfilled.filter((f) => f.type === 'bearish').slice(-1)
-      ;[...recentBull, ...recentBear].forEach((f) => {
-        const c = f.type === 'bullish' ? '#10B98188' : '#EF444488'
-        addLine(ictLinesRef.current, f.top,    c, `FVG${f.type === 'bullish' ? '↑' : '↓'}`, LineStyle.Dashed)
-        addLine(ictLinesRef.current, f.bottom, c, `FVG${f.type === 'bullish' ? '↑' : '↓'}`, LineStyle.Dashed)
+      const recentBull = unfilled.filter((f) => f.base_type === 'bullish_fvg').slice(-1)
+      const recentBear = unfilled.filter((f) => f.base_type === 'bearish_fvg').slice(-1)
+      recentBull.forEach((f) => {
+        addLine(ictLinesRef.current, f.top,    '#10B98188', 'FVG↑', LineStyle.Dashed)
+        addLine(ictLinesRef.current, f.bottom, '#10B98188', 'FVG↑', LineStyle.Dashed)
+      })
+      recentBear.forEach((f) => {
+        addLine(ictLinesRef.current, f.top,    '#EF444488', 'FVG↓', LineStyle.Dashed)
+        addLine(ictLinesRef.current, f.bottom, '#EF444488', 'FVG↓', LineStyle.Dashed)
       })
     }
 
     // Order Blocks — 1 bullish (demand) + 1 bearish (supply), closest to price
     if (overlays.ob) {
       const price = data?.bars?.at(-1)?.close
+      const allOBs = ictData.order_blocks || []
       const sortByCloseness = (arr) => price
         ? [...arr].sort((a, b) => Math.abs(a.mid - price) - Math.abs(b.mid - price))
         : arr
-      const bestBull = sortByCloseness(ictData.order_blocks?.bullish || []).slice(0, 1)
-      const bestBear = sortByCloseness(ictData.order_blocks?.bearish || []).slice(0, 1)
+      const bestBull = sortByCloseness(allOBs.filter((o) => o.type === 'bullish_ob')).slice(0, 1)
+      const bestBear = sortByCloseness(allOBs.filter((o) => o.type === 'bearish_ob')).slice(0, 1)
       bestBull.forEach((ob) => {
         addLine(ictLinesRef.current, ob.high, '#10B981', 'Demand H', LineStyle.Solid, 1)
         addLine(ictLinesRef.current, ob.low,  '#10B981', 'Demand L', LineStyle.Solid, 1)
@@ -415,8 +419,8 @@ export default function Charts() {
           <span className="text-terminal-muted font-medium shrink-0">ICT Signals:</span>
           {ictData.summary && (
             <>
-              <span><span className="text-green-400">FVG↑</span> <span className="text-terminal-text">{ictData.summary.unfilled_bullish ?? 0}</span></span>
-              <span><span className="text-red-400">FVG↓</span> <span className="text-terminal-text">{ictData.summary.unfilled_bearish ?? 0}</span></span>
+              <span><span className="text-green-400">FVG↑</span> <span className="text-terminal-text">{ictData.summary.unfilled_bullish_fvgs ?? 0}</span></span>
+              <span><span className="text-red-400">FVG↓</span> <span className="text-terminal-text">{ictData.summary.unfilled_bearish_fvgs ?? 0}</span></span>
               <span><span className="text-yellow-400">iFVG</span> <span className="text-terminal-text">{ictData.summary.ifvg_count ?? 0}</span></span>
               <span><span className="text-blue-400">OB</span> <span className="text-terminal-text">{ictData.summary.total_obs ?? 0}</span></span>
             </>

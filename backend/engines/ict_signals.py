@@ -592,9 +592,9 @@ def get_advanced_signals(
 # ---------------------------------------------------------------------------
 
 _INSTRUMENT_CONFIG = {
-    "MNQ": {"multiplier": 44.0, "dollars_per_point": 2.0, "tick_size": 0.25, "name": "Micro NQ"},
-    "MES": {"multiplier": 10.0, "dollars_per_point": 5.0, "tick_size": 0.25, "name": "Micro ES"},
-    "MGC": {"multiplier": 1.0,  "dollars_per_point": 10.0, "tick_size": 0.1,  "name": "Micro Gold"},
+    "MNQ": {"multiplier": 1.0, "dollars_per_point": 2.0, "tick_size": 0.25, "name": "Micro NQ"},
+    "MES": {"multiplier": 1.0, "dollars_per_point": 5.0, "tick_size": 0.25, "name": "Micro ES"},
+    "MGC": {"multiplier": 1.0, "dollars_per_point": 10.0, "tick_size": 0.1,  "name": "Micro Gold"},
 }
 
 

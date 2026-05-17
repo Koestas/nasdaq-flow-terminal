@@ -4,7 +4,11 @@ import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts'
 import { apiFetch, fmt } from '../lib/api'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, GraduationCap } from 'lucide-react'
 
-const SYMBOLS = ['QQQ', 'SPY', 'GC=F']
+const SYMBOLS = [
+  { value: 'NQ=F', label: 'MNQ' },
+  { value: 'ES=F', label: 'MES' },
+  { value: 'GC=F', label: 'MGC' },
+]
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h']
 
 // Returns "YYYY-MM-DDTHH:mm" defaulting to last weekday at 10:00 AM
@@ -185,7 +189,7 @@ function CoachPanel({ data }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Learn() {
-  const [symbol,       setSymbol]       = useState('QQQ')
+  const [symbol,       setSymbol]       = useState('NQ=F')
   const [interval,     setInterval]     = useState('5m')
   const [endTime,      setEndTime]      = useState(defaultEndTime)
   const [hovered,      setHovered]      = useState(null)
@@ -301,48 +305,61 @@ export default function Learn() {
     }
 
     const sl = data.session_levels || {}
-    addLine(sl.asia_high,     '#3B82F6', 'Asia H',  LineStyle.Dashed)
-    addLine(sl.asia_low,      '#3B82F6', 'Asia L',  LineStyle.Dashed)
-    addLine(sl.london_high,   '#F97316', 'London H',LineStyle.Dashed)
-    addLine(sl.london_low,    '#F97316', 'London L',LineStyle.Dashed)
-    addLine(sl.prev_day_high, '#6B7280', 'PDH',     LineStyle.Dotted)
-    addLine(sl.prev_day_low,  '#6B7280', 'PDL',     LineStyle.Dotted)
-    addLine(sl.today_high,    '#E2E8F0', 'Today H', LineStyle.Solid)
-    addLine(sl.today_low,     '#E2E8F0', 'Today L', LineStyle.Solid)
+    addLine(sl.asia_high,     '#60A5FA', 'Asia H',  LineStyle.Dashed, 2)
+    addLine(sl.asia_low,      '#60A5FA', 'Asia L',  LineStyle.Dashed, 2)
+    addLine(sl.london_high,   '#FB923C', 'London H',LineStyle.Dashed, 2)
+    addLine(sl.london_low,    '#FB923C', 'London L',LineStyle.Dashed, 2)
+    addLine(sl.prev_day_high, '#94A3B8', 'PDH',     LineStyle.Solid,  2)
+    addLine(sl.prev_day_low,  '#94A3B8', 'PDL',     LineStyle.Solid,  2)
+    addLine(sl.today_high,    '#F1F5F9', 'Today H', LineStyle.Solid,  1)
+    addLine(sl.today_low,     '#F1F5F9', 'Today L', LineStyle.Solid,  1)
 
-    // FVGs
-    ;(data.fvgs || []).filter((f) => !f.filled && !f.inverted).slice(0, 6).forEach((f) => {
-      const c = f.type === 'bullish' ? '#10B981bb' : '#EF4444bb'
-      addLine(f.top,    c, `FVG${f.type === 'bullish' ? '↑' : '↓'} T`, LineStyle.Dashed)
-      addLine(f.bottom, c, `FVG${f.type === 'bullish' ? '↑' : '↓'} B`, LineStyle.Dashed)
+    // iFVGs — entry zones, top 2 only (most important)
+    ;(data.ifvgs || []).slice(-2).forEach((f) => {
+      addLine(f.top,    '#F59E0B', 'iFVG', LineStyle.Solid, 2)
+      addLine(f.bottom, '#F59E0B', 'iFVG', LineStyle.Solid, 2)
     })
 
-    // iFVGs
-    ;(data.ifvgs || []).slice(0, 4).forEach((f) => {
-      addLine(f.top,    '#F59E0B', 'iFVG ↑', LineStyle.Solid, 2)
-      addLine(f.bottom, '#F59E0B', 'iFVG ↓', LineStyle.Solid, 2)
-    })
-
-    // OBs
-    ;(data.order_blocks?.bullish || []).slice(0, 3).forEach((ob) => {
-      addLine(ob.high, '#10B981', 'OB H (Demand)', LineStyle.Solid, 2)
-      addLine(ob.low,  '#10B981', 'OB L (Demand)', LineStyle.Solid, 2)
-    })
-    ;(data.order_blocks?.bearish || []).slice(0, 3).forEach((ob) => {
-      addLine(ob.high, '#EF4444', 'OB H (Supply)', LineStyle.Solid, 2)
-      addLine(ob.low,  '#EF4444', 'OB L (Supply)', LineStyle.Solid, 2)
-    })
-
-    // Equal H/L
-    const ehl = data.equal_hl || {}
-    ;(ehl.equal_highs || []).forEach((e) => addLine(e.level, '#A78BFA', `EQH ×${e.count}`, LineStyle.Dotted))
-    ;(ehl.equal_lows  || []).forEach((e) => addLine(e.level, '#A78BFA', `EQL ×${e.count}`, LineStyle.Dotted))
-
-    // DOL
+    // DOL — single most important target line
     const dol = data.draw_on_liquidity || {}
     if (dol.target && dol.direction !== 'neutral') {
       addLine(dol.target, dol.direction === 'up' ? '#38BDF8' : '#F87171', `DOL ${dol.direction === 'up' ? '↑' : '↓'}`, LineStyle.Solid, 2)
     }
+
+    // FVGs — most recent 1 per direction only
+    const unfilled = (data.fvgs || []).filter((f) => !f.filled && !f.inverted)
+    const lastBull = unfilled.filter((f) => f.base_type === 'bullish_fvg').slice(-1)
+    const lastBear = unfilled.filter((f) => f.base_type === 'bearish_fvg').slice(-1)
+    lastBull.forEach((f) => {
+      addLine(f.top,    '#10B98177', 'FVG↑', LineStyle.Dashed)
+      addLine(f.bottom, '#10B98177', 'FVG↑', LineStyle.Dashed)
+    })
+    lastBear.forEach((f) => {
+      addLine(f.top,    '#EF444477', 'FVG↓', LineStyle.Dashed)
+      addLine(f.bottom, '#EF444477', 'FVG↓', LineStyle.Dashed)
+    })
+
+    // OBs — 1 closest to price per side
+    const currentPrice = data.current_price
+    const allOBs = data.order_blocks || []
+    const sortByClose = (arr) => currentPrice
+      ? [...arr].sort((a, b) => Math.abs(a.mid - currentPrice) - Math.abs(b.mid - currentPrice))
+      : arr
+    sortByClose(allOBs.filter((o) => o.type === 'bullish_ob')).slice(0, 1).forEach((ob) => {
+      addLine(ob.high, '#10B981', 'Demand H', LineStyle.Solid, 1)
+      addLine(ob.low,  '#10B981', 'Demand L', LineStyle.Solid, 1)
+    })
+    sortByClose(allOBs.filter((o) => o.type === 'bearish_ob')).slice(0, 1).forEach((ob) => {
+      addLine(ob.high, '#EF4444', 'Supply H', LineStyle.Solid, 1)
+      addLine(ob.low,  '#EF4444', 'Supply L', LineStyle.Solid, 1)
+    })
+
+    // Equal H/L — strongest cluster only per side
+    const ehl = data.equal_hl || {}
+    const topH = [...(ehl.equal_highs || [])].sort((a, b) => b.count - a.count).slice(0, 1)
+    const topL = [...(ehl.equal_lows  || [])].sort((a, b) => b.count - a.count).slice(0, 1)
+    topH.forEach((e) => addLine(e.level, '#A78BFA', `EQH ×${e.count}`, LineStyle.Dotted, 2))
+    topL.forEach((e) => addLine(e.level, '#A78BFA', `EQL ×${e.count}`, LineStyle.Dotted, 2))
   }, [data])
 
   const isUp = hovered ? hovered.close >= hovered.open : true
@@ -363,11 +380,11 @@ export default function Learn() {
         {/* Symbol */}
         <div className="flex gap-1">
           {SYMBOLS.map((s) => (
-            <button key={s} onClick={() => setSymbol(s)}
+            <button key={s.value} onClick={() => setSymbol(s.value)}
               className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                symbol === s ? 'bg-terminal-blue text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'
+                symbol === s.value ? 'bg-terminal-blue text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'
               }`}
-            >{s}</button>
+            >{s.label}</button>
           ))}
         </div>
 

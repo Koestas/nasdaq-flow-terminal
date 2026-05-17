@@ -534,7 +534,7 @@ function TradeSetupCard({ setup, symbol, instrument, isLoading, balance, setBala
             <div className={clsx('text-base font-bold', dirColor)}>
               {isLong ? 'LONG' : 'SHORT'} {instrument}
             </div>
-            <div className="text-xs text-terminal-muted">{setup.instrument_name} · ${setup.usd_per_point}/pt · {symbol} proxy</div>
+            <div className="text-xs text-terminal-muted">{setup.instrument_name} · ${setup.usd_per_point}/pt</div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -581,19 +581,16 @@ function TradeSetupCard({ setup, symbol, instrument, isLoading, balance, setBala
           <div className="text-xs text-terminal-muted mb-1">ENTRY</div>
           <div className="font-mono font-bold text-terminal-blue text-xl">{setup.entry_inst}</div>
           <div className="text-xs text-terminal-muted mt-0.5">{instrument} pts</div>
-          <div className="text-xs text-terminal-muted opacity-60">{symbol} {setup.entry_proxy}</div>
         </div>
         <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-red/30">
           <div className="text-xs text-terminal-red mb-1">STOP</div>
           <div className="font-mono font-bold text-terminal-red text-xl">{setup.stop_inst}</div>
           <div className="text-xs text-terminal-muted mt-0.5">{setup.stop_dist_inst} pts risk</div>
-          <div className="text-xs text-terminal-muted opacity-60">{symbol} {setup.stop_proxy}</div>
         </div>
         <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-green/30">
           <div className="text-xs text-terminal-green mb-1">TARGET</div>
           <div className="font-mono font-bold text-terminal-green text-xl">{setup.target_inst}</div>
           <div className="text-xs text-terminal-muted mt-0.5">{setup.target_dist_inst} pts gain</div>
-          <div className="text-xs text-terminal-muted opacity-60">{symbol} {setup.target_proxy}</div>
         </div>
       </div>
 
@@ -662,9 +659,9 @@ function AccountInputs({ balance, setBalance, prevClose, setPrevClose, onRecalc 
 }
 
 const SYMBOLS = [
-  { value: 'QQQ', label: 'QQQ → MNQ', secondary: 'SPY', instrument: 'MNQ' },
-  { value: 'SPY', label: 'SPY → MES', secondary: 'QQQ', instrument: 'MES' },
-  { value: 'GC=F', label: 'Gold → MGC', secondary: 'GLD', instrument: 'MGC' },
+  { value: 'NQ=F', label: 'MNQ', secondary: 'ES=F', instrument: 'MNQ' },
+  { value: 'ES=F', label: 'MES', secondary: 'NQ=F', instrument: 'MES' },
+  { value: 'GC=F', label: 'MGC', secondary: 'GLD', instrument: 'MGC' },
 ]
 
 export default function ICT() {
