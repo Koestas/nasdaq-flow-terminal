@@ -5,7 +5,7 @@ import {
   Clock, Target, TrendingUp, TrendingDown, Minus,
   AlertTriangle, CheckCircle, XCircle, Zap, BarChart2,
   RefreshCw, ChevronDown, ChevronUp, Activity, Layers,
-  ArrowUpCircle, ArrowDownCircle, Radio
+  ArrowUpCircle, ArrowDownCircle, Radio, Ban, Crosshair
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -323,6 +323,163 @@ function SMTCard({ smt }) {
 // Main page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Confluence Decision — the "what's the play" synthesizer
+// ---------------------------------------------------------------------------
+
+function ConfluenceDecision({ session, dp, draw, ifvgs, adv, data }) {
+  if (!session || !adv) return null
+
+  const inKillzone = session?.in_killzone
+  const zone = dp?.zone
+  const drawDir = draw?.direction
+  const drawTarget = draw?.target
+  const sweeps = adv?.liquidity_sweeps || []
+  const recentSweep = adv?.recent_sweep
+  const po3Phase = adv?.po3_phase?.phase
+  const inOte = adv?.in_ote
+  const structure = adv?.mss_choch?.last_structure
+  const smt = adv?.smt_divergence
+  const longScore = data?.long_setup?.score || 0
+  const shortScore = data?.short_setup?.score || 0
+
+  const bullishIFVGs = ifvgs.filter(f => f.base_type === 'bullish_fvg')
+  const bearishIFVGs = ifvgs.filter(f => f.base_type === 'bearish_fvg')
+
+  // Score each direction
+  let longPoints = 0, shortPoints = 0
+  const longChecks = [], shortChecks = []
+
+  const check = (condition, label, pts, side) => {
+    if (side === 'long' || side === 'both') {
+      longChecks.push({ label, met: condition })
+      if (condition) longPoints += pts
+    }
+    if (side === 'short' || side === 'both') {
+      shortChecks.push({ label, met: condition })
+      if (condition) shortPoints += pts
+    }
+  }
+
+  check(inKillzone, 'NY Killzone active (9:30–11:30 AM)', 25, 'both')
+  check(recentSweep?.direction === 'bullish', 'Bullish sweep of key level detected', 25, 'long')
+  check(recentSweep?.direction === 'bearish', 'Bearish sweep of key level detected', 25, 'short')
+  check(zone === 'discount', 'Price in discount zone (<50% range)', 15, 'long')
+  check(zone === 'premium', 'Price in premium zone (>50% range)', 15, 'short')
+  check(drawDir === 'up', 'Draw on liquidity is above price', 15, 'long')
+  check(drawDir === 'down', 'Draw on liquidity is below price', 15, 'short')
+  check(bullishIFVGs.length > 0, `Bullish iFVG present (${bullishIFVGs.length})`, 10, 'long')
+  check(bearishIFVGs.length > 0, `Bearish iFVG present (${bearishIFVGs.length})`, 10, 'short')
+  check(inOte && adv?.ote_zone?.direction === 'bullish', 'Price inside bullish OTE zone', 5, 'long')
+  check(inOte && adv?.ote_zone?.direction === 'bearish', 'Price inside bearish OTE zone', 5, 'short')
+  check(structure === 'bullish' || structure === 'bullish_lean', 'Market structure bullish', 5, 'long')
+  check(structure === 'bearish' || structure === 'bearish_lean', 'Market structure bearish', 5, 'short')
+  check(smt?.type === 'bullish_smt', 'Bullish SMT divergence', 5, 'long')
+  check(smt?.type === 'bearish_smt', 'Bearish SMT divergence', 5, 'short')
+
+  const maxPts = 100
+  const longPct = Math.round((longPoints / maxPts) * 100)
+  const shortPct = Math.round((shortPoints / maxPts) * 100)
+
+  // Decision logic
+  let decision, color, icon, subtitle, action, invalidation
+  const noSweep = !recentSweep
+  const outsideKZ = !inKillzone
+
+  if (outsideKZ) {
+    decision = 'NO TRADE — Outside Killzone'
+    color = 'border-terminal-muted/40 bg-terminal-card'
+    icon = <Ban size={18} className="text-terminal-muted"/>
+    subtitle = `Wait for NY Killzone: 9:30–11:30 AM ET. Current session: ${session.session}.`
+    action = 'Stand down. No trading outside the killzone — the edge disappears.'
+    invalidation = null
+  } else if (noSweep && po3Phase === 'accumulation') {
+    decision = 'WAIT — No Sweep Yet'
+    color = 'border-terminal-yellow/40 bg-terminal-yellow/5'
+    icon = <Clock size={18} className="text-terminal-yellow"/>
+    subtitle = 'Killzone is active but no key level has been swept. Sit on your hands.'
+    action = `Watch: ${draw.reason || 'session levels'}. Wait for price to sweep a level before doing anything.`
+    invalidation = 'If 11:30 AM passes with no setup, session is done — close charts.'
+  } else if (longPoints > shortPoints && longPoints >= 50) {
+    const conf = longPoints >= 75 ? 'HIGH' : longPoints >= 55 ? 'MEDIUM' : 'LOW'
+    decision = `POTENTIAL LONG`
+    color = 'border-terminal-green/50 bg-terminal-green/10'
+    icon = <ArrowUpCircle size={18} className="text-terminal-green"/>
+    subtitle = `Confidence: ${conf} (${longPoints}/${maxPts})`
+    action = bullishIFVGs.length
+      ? `Wait for price to pull back to bullish iFVG ${bullishIFVGs.map(f => `${f.bottom?.toFixed(2)}–${f.top?.toFixed(2)}`).join(', ')}. Enter on the touch. Target: ${drawTarget ? `$${drawTarget?.toFixed(2)}` : 'draw on liquidity above'}.`
+      : `Bullish sweep detected. Look for a 30s/1m/2m FVG to form and invert (iFVG). Then enter on the iFVG retest.`
+    invalidation = `Invalid if price closes below the sweep low or put pressure expands sharply.`
+  } else if (shortPoints > longPoints && shortPoints >= 50) {
+    const conf = shortPoints >= 75 ? 'HIGH' : shortPoints >= 55 ? 'MEDIUM' : 'LOW'
+    decision = `POTENTIAL SHORT`
+    color = 'border-terminal-red/50 bg-terminal-red/10'
+    icon = <ArrowDownCircle size={18} className="text-terminal-red"/>
+    subtitle = `Confidence: ${conf} (${shortPoints}/${maxPts})`
+    action = bearishIFVGs.length
+      ? `Wait for price to retrace to bearish iFVG ${bearishIFVGs.map(f => `${f.bottom?.toFixed(2)}–${f.top?.toFixed(2)}`).join(', ')}. Enter on the touch. Target: ${drawTarget ? `$${drawTarget?.toFixed(2)}` : 'draw on liquidity below'}.`
+      : `Bearish sweep detected. Look for a 30s/1m/2m FVG to form and invert (iFVG). Then enter on the iFVG retest.`
+    invalidation = `Invalid if price closes above the sweep high or call pressure expands sharply.`
+  } else {
+    decision = 'NO CLEAR EDGE — Wait'
+    color = 'border-terminal-muted/40 bg-terminal-card'
+    icon = <Minus size={18} className="text-terminal-muted"/>
+    subtitle = `Long: ${longPoints}pts  ·  Short: ${shortPoints}pts — signals mixed or balanced`
+    action = 'Mixed signals. Do not force a trade. Wait for one side to dominate cleanly.'
+    invalidation = null
+  }
+
+  const isGreen = color.includes('green'), isRed = color.includes('red')
+  const activeChecks = isGreen ? longChecks : isRed ? shortChecks : longChecks
+
+  return (
+    <div className={clsx('rounded border-2 p-4 space-y-3', color)}>
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        {icon}
+        <div className="flex-1">
+          <div className={clsx('text-base font-bold', isGreen ? 'text-terminal-green' : isRed ? 'text-terminal-red' : 'text-terminal-muted')}>
+            {decision}
+          </div>
+          <div className="text-xs text-terminal-muted">{subtitle}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-terminal-muted">Confluence</div>
+          <div className={clsx('font-mono font-bold text-lg', isGreen ? 'text-terminal-green' : isRed ? 'text-terminal-red' : 'text-terminal-muted')}>
+            {isGreen ? longPct : isRed ? shortPct : Math.max(longPct, shortPct)}%
+          </div>
+        </div>
+      </div>
+
+      {/* Action */}
+      {action && (
+        <div className={clsx('text-sm px-3 py-2 rounded', isGreen ? 'bg-terminal-green/10 text-terminal-green' : isRed ? 'bg-terminal-red/10 text-terminal-red' : 'bg-terminal-border/30 text-terminal-muted')}>
+          <span className="font-semibold">Action: </span>{action}
+        </div>
+      )}
+
+      {/* Invalidation */}
+      {invalidation && (
+        <div className="text-xs text-terminal-muted px-3 py-1.5 rounded bg-terminal-border/20 border border-terminal-border/30">
+          <span className="text-terminal-yellow font-semibold">⚠ Invalidated if: </span>{invalidation}
+        </div>
+      )}
+
+      {/* Checklist */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+        {activeChecks.map((c, i) => (
+          <div key={i} className="flex items-center gap-1.5 text-xs">
+            {c.met
+              ? <CheckCircle size={11} className="text-terminal-green shrink-0"/>
+              : <XCircle size={11} className="text-terminal-muted shrink-0"/>}
+            <span className={c.met ? 'text-terminal-text' : 'text-terminal-muted'}>{c.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 const SYMBOLS = [
   { value: 'QQQ', label: 'QQQ → MNQ', secondary: 'SPY' },
   { value: 'SPY', label: 'SPY → MES', secondary: 'QQQ' },
@@ -415,6 +572,18 @@ export default function ICT() {
           label={po3.phase_label}
           description={po3.description}
           minutesSinceOpen={po3.minutes_since_open}
+        />
+      )}
+
+      {/* ── CONFLUENCE DECISION — the play ── */}
+      {!isLoading && !advLoading && (
+        <ConfluenceDecision
+          session={session}
+          dp={dp}
+          draw={draw}
+          ifvgs={ifvgs}
+          adv={adv}
+          data={data}
         />
       )}
 

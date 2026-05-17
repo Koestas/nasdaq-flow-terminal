@@ -199,31 +199,61 @@ def get_leadership_quotes() -> list:
 
 def get_news(ticker: str = "QQQ") -> list:
     SENTIMENT_KEYWORDS = {
-        "bullish": ["surge", "rally", "gain", "rise", "beat", "record", "high", "upgrade", "buy", "positive"],
-        "bearish": ["drop", "fall", "decline", "loss", "miss", "low", "downgrade", "sell", "negative", "crash", "recession"],
+        "bullish": ["surge", "rally", "gain", "rise", "beat", "record", "high", "upgrade", "buy", "positive", "strong", "bullish"],
+        "bearish": ["drop", "fall", "decline", "loss", "miss", "low", "downgrade", "sell", "negative", "crash", "recession", "weak", "bearish", "slump"],
     }
-    try:
-        t = yf.Ticker(ticker)
-        raw = t.news or []
-        results = []
-        for item in raw[:15]:
-            title = item.get("title", "")
-            sentiment = "neutral"
-            title_lower = title.lower()
-            bull_score = sum(1 for w in SENTIMENT_KEYWORDS["bullish"] if w in title_lower)
-            bear_score = sum(1 for w in SENTIMENT_KEYWORDS["bearish"] if w in title_lower)
-            if bull_score > bear_score:
-                sentiment = "bullish"
-            elif bear_score > bull_score:
-                sentiment = "bearish"
-            pub_time = item.get("providerPublishTime", 0)
-            results.append({
-                "title": title,
-                "publisher": item.get("publisher", ""),
-                "link": item.get("link", ""),
-                "timestamp": datetime.fromtimestamp(pub_time, tz=timezone.utc).isoformat() if pub_time else None,
-                "sentiment": sentiment,
-            })
-        return results
-    except Exception:
-        return []
+    # Pull news from multiple relevant tickers and merge
+    tickers_to_fetch = ["QQQ", "NVDA", "MSFT", "SPY"] if ticker in ("QQQ", "SPY") else [ticker]
+    seen, results = set(), []
+
+    for tick in tickers_to_fetch:
+        try:
+            raw = yf.Ticker(tick).news or []
+            for item in raw[:12]:
+                # yfinance v0.2.50+ nests everything under 'content'
+                content = item.get("content") or item
+                title = content.get("title") or item.get("title", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+
+                # Link: prefer canonicalUrl, fall back to clickThroughUrl / link
+                link = (
+                    (content.get("canonicalUrl") or {}).get("url")
+                    or (content.get("clickThroughUrl") or {}).get("url")
+                    or item.get("link", "")
+                )
+                # Publisher
+                publisher = (
+                    (content.get("provider") or {}).get("displayName")
+                    or item.get("publisher", "")
+                )
+                # Timestamp: ISO string from new API or Unix int from old API
+                ts_raw = content.get("pubDate") or content.get("displayTime")
+                if ts_raw:
+                    timestamp = ts_raw
+                else:
+                    pub_time = item.get("providerPublishTime", 0)
+                    timestamp = datetime.fromtimestamp(pub_time, tz=timezone.utc).isoformat() if pub_time else None
+
+                # Sentiment scoring
+                title_lower = title.lower()
+                bull = sum(1 for w in SENTIMENT_KEYWORDS["bullish"] if w in title_lower)
+                bear = sum(1 for w in SENTIMENT_KEYWORDS["bearish"] if w in title_lower)
+                sentiment = "bullish" if bull > bear else "bearish" if bear > bull else "neutral"
+
+                results.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "link": link,
+                    "timestamp": timestamp,
+                    "sentiment": sentiment,
+                    "summary": content.get("summary", ""),
+                    "ticker": tick,
+                })
+        except Exception:
+            continue
+
+    # Sort newest first, cap at 25
+    results.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return results[:25]

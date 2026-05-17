@@ -17,6 +17,7 @@ export const fmt = {
     return `$${n.toFixed(0)}`
   },
   num: (v) => v == null ? '--' : Number(v).toLocaleString(),
+  currency: (v) => v == null ? '--' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
   timeAgo: (iso) => {
     if (!iso) return '--'
     const diff = Date.now() - new Date(iso).getTime()
