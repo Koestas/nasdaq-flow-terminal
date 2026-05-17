@@ -3,7 +3,7 @@ import { useState } from 'react'
 import {
   LayoutDashboard, Activity, BarChart2, TrendingUp, Zap,
   Table2, Layers, BookOpen, Newspaper, List, History,
-  BookMarked, Settings2, ChevronLeft, ChevronRight
+  BookMarked, Settings2, ChevronLeft, ChevronRight, Crosshair
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -16,6 +16,7 @@ const NAV = [
   { to: '/raw-chain', icon: Table2, label: 'Raw Chain' },
   { to: '/leadership', icon: Layers, label: 'Leadership' },
   { to: '/structure', icon: BookOpen, label: 'Structure' },
+  { to: '/ict', icon: Crosshair, label: 'ICT / SMC' },
   { to: '/news', icon: Newspaper, label: 'News' },
   { to: '/tape', icon: List, label: 'Tape' },
   { to: '/replay', icon: History, label: 'Replay' },
