@@ -150,7 +150,7 @@ export default function Backtest() {
       {/* Disclaimer */}
       <div className="flex items-start gap-2 px-3 py-2 bg-terminal-yellow/5 border border-terminal-yellow/20 rounded text-xs text-terminal-yellow/80">
         <AlertCircle size={12} className="shrink-0 mt-0.5" />
-        Simulated results using Yahoo Finance 5m data (15-20 min delayed). One A+ trade per day — requires killzone + iFVG + correct discount/premium zone + DOL aligned (all 4 criteria). Entry fill simulated: trade only counts if price retraced to the limit entry. Past performance ≠ future results.
+        Simulated results using Yahoo Finance 5m data (15-20 min delayed). Up to 2 trades per day — first A/A+ setup in the 9:30–11:30 AM ET killzone. Win = done for the day. Lose once = try again. Lose twice = done. Past performance ≠ future results.
       </div>
 
       {!data && !running && (

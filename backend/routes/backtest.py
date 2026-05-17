@@ -79,31 +79,9 @@ def _group_by_day(bars: list) -> dict:
 
 def _simulate_trade(entry_price: float, stop: float, target: float,
                     direction: str, forward_bars: list) -> dict:
-    """
-    Walk forward bars with realistic entry fill simulation.
-    Entry is a limit order — price must actually REACH the entry level before
-    the trade is active. If stop is hit before entry fills, the trade is expired.
-    """
-    filled = False
+    """Walk forward bars; return which level was hit first."""
     for b in forward_bars:
         h, l = b.get("high", 0), b.get("low", 0)
-
-        if not filled:
-            # Check if limit order was filled
-            if direction == "bullish" and l <= entry_price:
-                filled = True
-            elif direction == "bearish" and h >= entry_price:
-                filled = True
-
-            if not filled:
-                # If stop level is hit before entry, order never executed
-                if direction == "bullish" and l <= stop:
-                    return {"result": "expired", "exit_price": entry_price}
-                if direction == "bearish" and h >= stop:
-                    return {"result": "expired", "exit_price": entry_price}
-                continue
-
-        # In trade — check stop then target (stop takes priority on same bar)
         if direction == "bullish":
             if l <= stop:
                 return {"result": "loss", "exit_price": stop}
@@ -114,19 +92,17 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
                 return {"result": "loss", "exit_price": stop}
             if l <= target:
                 return {"result": "win",  "exit_price": target}
-
-    if not filled:
-        return {"result": "expired", "exit_price": entry_price}
     last = forward_bars[-1]["close"] if forward_bars else entry_price
     return {"result": "expired", "exit_price": last}
 
 
 # ── Per-day signal detection ──────────────────────────────────────────────────
 
-def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ") -> dict | None:
+def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ", start_bar_index: int = 6) -> dict | None:
     """
     Walk through the NY killzone bars one at a time; return the first
-    A+ setup (score ≥ 80) with sweep + iFVG + confirmed DOL alignment.
+    A or A+ setup with a sweep + iFVG. Accepts a start_bar_index so
+    a second attempt can skip past the first setup's entry bar.
     Returns None if no qualifying setup found.
     """
     kz_bars = [
@@ -139,7 +115,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         return None
 
     # Build context from prior bars + bars up to this point in killzone
-    for i in range(6, len(kz_bars) + 1):
+    for i in range(start_bar_index, len(kz_bars) + 1):
         # Use up to 200 prior bars + current killzone window for context
         context = (all_prior_bars + day_bars)[-200:] + kz_bars[:i]
 
@@ -176,15 +152,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         grade = ("A+" if setup_score >= 80 else
                  "A"  if setup_score >= 60 else
                  "B"  if setup_score >= 40 else "C")
-        # Require A+ only — needs killzone(25)+iFVG(25)+zone(20)+DOL(20) = 90
-        if grade != "A+":
-            continue
-
-        # Require DOL to explicitly point in trade direction — no trading against liquidity
-        dol_pre = analysis.get("draw_on_liquidity") or {}
-        if bias == "bullish" and dol_pre.get("direction") != "up":
-            continue
-        if bias == "bearish" and dol_pre.get("direction") != "down":
+        if grade not in ("A+", "A"):
             continue
 
         # Build entry / stop / target in price units
@@ -208,7 +176,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
             stop    = max(raw_stop, entry + min_st)
 
         stop_dist = abs(entry - stop)
-        dol       = dol_pre
+        dol       = analysis.get("draw_on_liquidity") or {}
         dol_tgt   = dol.get("target")
         if dol_tgt and abs(dol_tgt - entry) > stop_dist:
             target = dol_tgt
@@ -274,43 +242,61 @@ async def run_backtest(
             prior_bars.extend(by_day[pd])
         prior_bars = prior_bars[-300:]  # keep last 300 bars as context
 
-        setup = _find_killzone_setup(day_bars, prior_bars, instrument=instrument.upper())
-        if not setup:
+        # Daily limit: 1 win = done; 2nd loss = done. Max 2 attempts per day.
+        day_losses  = 0
+        next_start  = 6   # bar index to resume search from
+        day_traded  = False
+
+        while day_losses < 2:
+            setup = _find_killzone_setup(day_bars, prior_bars,
+                                         instrument=instrument.upper(),
+                                         start_bar_index=next_start)
+            if not setup:
+                break
+
+            outcome = _simulate_trade(
+                setup["entry"], setup["stop"], setup["target"],
+                setup["direction"], setup["remaining_bars"],
+            )
+
+            pts = (outcome["exit_price"] - setup["entry"]) if setup["direction"] == "bullish" \
+                  else (setup["entry"] - outcome["exit_price"])
+            pnl = round(pts * usd_per_pt, 2)
+            running_pnl += pnl
+            day_traded = True
+
+            trade = {
+                "date":        d.isoformat(),
+                "day":         d.strftime("%a %b %d"),
+                "direction":   setup["direction"],
+                "grade":       setup["grade"],
+                "score":       setup["score"],
+                "entry":       setup["entry"],
+                "stop":        setup["stop"],
+                "target":      setup["target"],
+                "exit_price":  outcome["exit_price"],
+                "result":      outcome["result"],
+                "pts":         round(pts, 2),
+                "pnl":         pnl,
+                "rr_achieved": round(pts / setup["stop_dist"], 2) if setup["stop_dist"] else 0,
+                "rr_planned":  setup["rr_ratio"],
+                "sweep":       setup["sweep_label"],
+                "fvg_zone":    setup["fvg_zone"],
+                "dol":         setup["dol_reason"],
+                "running_pnl": round(running_pnl, 2),
+            }
+            trades.append(trade)
+            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
+
+            if outcome["result"] == "win":
+                break  # protected the day — stop trading
+            if outcome["result"] == "loss":
+                day_losses += 1
+                next_start = setup["bar_index"] + 1  # resume search after this bar
+                # if day_losses == 2 the while condition stops the loop
+
+        if not day_traded:
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
-            continue
-
-        outcome = _simulate_trade(
-            setup["entry"], setup["stop"], setup["target"],
-            setup["direction"], setup["remaining_bars"],
-        )
-
-        pts   = (outcome["exit_price"] - setup["entry"]) if setup["direction"] == "bullish" \
-                else (setup["entry"] - outcome["exit_price"])
-        pnl   = round(pts * usd_per_pt, 2)
-        running_pnl += pnl
-
-        trade = {
-            "date":        d.isoformat(),
-            "day":         d.strftime("%a %b %d"),
-            "direction":   setup["direction"],
-            "grade":       setup["grade"],
-            "score":       setup["score"],
-            "entry":       setup["entry"],
-            "stop":        setup["stop"],
-            "target":      setup["target"],
-            "exit_price":  outcome["exit_price"],
-            "result":      outcome["result"],
-            "pts":         round(pts, 2),
-            "pnl":         pnl,
-            "rr_achieved": round(pts / setup["stop_dist"], 2) if setup["stop_dist"] else 0,
-            "rr_planned":  setup["rr_ratio"],
-            "sweep":       setup["sweep_label"],
-            "fvg_zone":    setup["fvg_zone"],
-            "dol":         setup["dol_reason"],
-            "running_pnl": round(running_pnl, 2),
-        }
-        trades.append(trade)
-        equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
 
     # ── Statistics ────────────────────────────────────────────────────────────
     wins   = [t for t in trades if t["result"] == "win"]
