@@ -290,10 +290,12 @@ async def run_backtest(
 
             if outcome["result"] == "win":
                 break  # protected the day — stop trading
-            if outcome["result"] == "loss":
+            elif outcome["result"] == "loss":
                 day_losses += 1
                 next_start = setup["bar_index"] + 1  # resume search after this bar
-                # if day_losses == 2 the while condition stops the loop
+            else:
+                # expired = killzone ended without resolution — no second attempt
+                break
 
         if not day_traded:
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
