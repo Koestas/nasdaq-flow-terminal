@@ -15,6 +15,7 @@ from routes.journal import router as journal_router
 from routes.providers import router as providers_router
 from routes.schwab import router as schwab_router
 from routes.ict import router as ict_router
+from routes.risk import router as risk_router
 
 
 app = FastAPI(title="NASDAQ Flow Terminal", version="1.0.0")
@@ -35,6 +36,7 @@ app.include_router(journal_router)
 app.include_router(providers_router)
 app.include_router(schwab_router)
 app.include_router(ict_router)
+app.include_router(risk_router)
 
 
 @app.on_event("startup")
