@@ -79,9 +79,31 @@ def _group_by_day(bars: list) -> dict:
 
 def _simulate_trade(entry_price: float, stop: float, target: float,
                     direction: str, forward_bars: list) -> dict:
-    """Walk forward bars; return which level was hit first."""
+    """
+    Walk forward bars with realistic entry fill simulation.
+    Entry is a limit order — price must actually REACH the entry level before
+    the trade is active. If stop is hit before entry fills, the trade is expired.
+    """
+    filled = False
     for b in forward_bars:
         h, l = b.get("high", 0), b.get("low", 0)
+
+        if not filled:
+            # Check if limit order was filled
+            if direction == "bullish" and l <= entry_price:
+                filled = True
+            elif direction == "bearish" and h >= entry_price:
+                filled = True
+
+            if not filled:
+                # If stop level is hit before entry, order never executed
+                if direction == "bullish" and l <= stop:
+                    return {"result": "expired", "exit_price": entry_price}
+                if direction == "bearish" and h >= stop:
+                    return {"result": "expired", "exit_price": entry_price}
+                continue
+
+        # In trade — check stop then target (stop takes priority on same bar)
         if direction == "bullish":
             if l <= stop:
                 return {"result": "loss", "exit_price": stop}
@@ -92,7 +114,9 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
                 return {"result": "loss", "exit_price": stop}
             if l <= target:
                 return {"result": "win",  "exit_price": target}
-    # Never resolved within the data window — mark as open/expired
+
+    if not filled:
+        return {"result": "expired", "exit_price": entry_price}
     last = forward_bars[-1]["close"] if forward_bars else entry_price
     return {"result": "expired", "exit_price": last}
 
@@ -102,7 +126,7 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
 def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ") -> dict | None:
     """
     Walk through the NY killzone bars one at a time; return the first
-    setup that reaches grade A or A+ with a sweep + iFVG.
+    A+ setup (score ≥ 80) with sweep + iFVG + confirmed DOL alignment.
     Returns None if no qualifying setup found.
     """
     kz_bars = [
@@ -152,7 +176,15 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         grade = ("A+" if setup_score >= 80 else
                  "A"  if setup_score >= 60 else
                  "B"  if setup_score >= 40 else "C")
-        if grade not in ("A+", "A"):
+        # Require A+ only — needs killzone(25)+iFVG(25)+zone(20)+DOL(20) = 90
+        if grade != "A+":
+            continue
+
+        # Require DOL to explicitly point in trade direction — no trading against liquidity
+        dol_pre = analysis.get("draw_on_liquidity") or {}
+        if bias == "bullish" and dol_pre.get("direction") != "up":
+            continue
+        if bias == "bearish" and dol_pre.get("direction") != "down":
             continue
 
         # Build entry / stop / target in price units
@@ -176,7 +208,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
             stop    = max(raw_stop, entry + min_st)
 
         stop_dist = abs(entry - stop)
-        dol       = analysis.get("draw_on_liquidity") or {}
+        dol       = dol_pre
         dol_tgt   = dol.get("target")
         if dol_tgt and abs(dol_tgt - entry) > stop_dist:
             target = dol_tgt
