@@ -211,7 +211,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.get("/run")
-async def run_backtest(
+def run_backtest(
     symbol:        str = Query(default="NQ=F", description="NQ=F, ES=F, or GC=F"),
     instrument:    str = Query(default="MNQ"),
     lookback_days: int = Query(default=30, ge=5, le=60),
