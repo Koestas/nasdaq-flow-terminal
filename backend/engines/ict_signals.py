@@ -638,6 +638,9 @@ def calc_auto_trade_setup(
             "setup": None,
             "direction": "neutral",
             "note": "No directional bias — wait for a sweep or MSS before sizing",
+            "current_inst": to_ticks(current_price * multiplier),
+            "current_price": current_price,
+            "pts_to_entry": None,
         }
 
     # ---- Entry from iFVG (proxy price units) ----
@@ -744,6 +747,9 @@ def calc_auto_trade_setup(
             "total_gain": round(tp_pts * usd_per_pt * max(contracts, 1), 2),
         }
 
+    current_inst = to_ticks(current_price * multiplier)
+    pts_to_entry = round(entry_inst - current_inst, 2)  # + = above current, - = below
+
     return {
         "direction": direction,
         "instrument": instrument.upper(),
@@ -756,6 +762,8 @@ def calc_auto_trade_setup(
         "target_proxy": round(target_proxy, 2),
         "stop_dist_proxy": round(stop_dist_proxy, 2),
         # Instrument-native levels
+        "current_inst": current_inst,
+        "pts_to_entry": pts_to_entry,
         "entry_inst": entry_inst,
         "stop_inst": stop_inst,
         "target_inst": target_inst,

@@ -3,7 +3,8 @@ import { useState } from 'react'
 import {
   LayoutDashboard, Activity, BarChart2, TrendingUp, Zap,
   Table2, Layers, BookOpen, Newspaper, List, History,
-  BookMarked, Settings2, ChevronLeft, ChevronRight, Crosshair, ShieldAlert, LineChart
+  BookMarked, Settings2, ChevronLeft, ChevronRight, Crosshair, ShieldAlert, LineChart,
+  GraduationCap
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -19,6 +20,7 @@ const NAV = [
   { to: '/ict', icon: Crosshair, label: 'ICT / SMC' },
   { to: '/risk', icon: ShieldAlert, label: 'Risk Manager' },
   { to: '/charts', icon: LineChart, label: 'Charts' },
+  { to: '/learn', icon: GraduationCap, label: 'Learn / Practice' },
   { to: '/news', icon: Newspaper, label: 'News' },
   { to: '/tape', icon: List, label: 'Tape' },
   { to: '/replay', icon: History, label: 'Replay' },
@@ -31,7 +33,7 @@ export default function Sidebar() {
 
   return (
     <aside className={clsx(
-      'fixed left-0 top-12 bottom-0 z-40 flex flex-col bg-terminal-card border-r border-terminal-border transition-all duration-200',
+      'fixed left-0 top-[76px] bottom-0 z-40 flex flex-col bg-terminal-card border-r border-terminal-border transition-all duration-200',
       collapsed ? 'w-12' : 'w-44'
     )}>
       <nav className="flex-1 py-2 overflow-y-auto">

@@ -30,6 +30,11 @@ body {
   background: #2d4060;
 }
 
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
 .glow-green { box-shadow: 0 0 8px rgba(0, 255, 136, 0.4); }
 .glow-red   { box-shadow: 0 0 8px rgba(255, 68, 102, 0.4); }
 .glow-blue  { box-shadow: 0 0 8px rgba(0, 170, 255, 0.4); }
@@ -58,6 +63,9 @@ body {
   }
   .badge-muted {
     @apply badge bg-terminal-border text-terminal-muted;
+  }
+  .step-btn {
+    @apply flex items-center gap-0.5 px-2 py-1 rounded text-xs text-terminal-muted bg-terminal-bg border border-terminal-border hover:text-terminal-blue hover:border-terminal-blue transition-colors;
   }
   .stat-value {
     @apply text-2xl font-bold text-terminal-text;

@@ -144,6 +144,12 @@ def extract_session_levels(bars: list) -> dict:
             result["today_low"] = round(min(t_lows), 2)
             if t_closes:
                 result["current_price"] = round(t_closes[-1], 2)
+    # Fallback: use last available close (e.g. weekends / after-hours)
+    if not result.get("current_price"):
+        for b in reversed(bars):
+            if b.get("close"):
+                result["current_price"] = round(b["close"], 2)
+                break
     return result
 
 

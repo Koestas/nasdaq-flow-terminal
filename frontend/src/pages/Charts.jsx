@@ -4,9 +4,9 @@ import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts'
 import { apiFetch, fmt } from '../lib/api'
 
 const SYMBOLS = [
-  { symbol: 'NQ=F', label: 'MNQ (NQ=F)' },
-  { symbol: 'ES=F', label: 'MES (ES=F)' },
-  { symbol: 'GC=F', label: 'MGC (GC=F)' },
+  { symbol: 'NQ=F', label: 'MNQ', ictSymbol: 'NQ=F' },
+  { symbol: 'ES=F', label: 'MES', ictSymbol: 'ES=F' },
+  { symbol: 'GC=F', label: 'MGC', ictSymbol: 'GC=F' },
 ]
 
 const INTERVAL_PERIODS = {
@@ -22,32 +22,37 @@ const PERIOD_LABELS = {
   '6mo': '6M', '1y': '1Y', '2y': '2Y',
 }
 
-function toUnixSeconds(isoTime) {
+const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true }
+
+function toUnix(isoTime) {
   return Math.floor(new Date(isoTime).getTime() / 1000)
 }
 
 export default function Charts() {
-  const [symbol, setSymbol] = useState('NQ=F')
+  const [symbolIndex, setSymbolIndex] = useState(0)
   const [interval, setInterval] = useState('5m')
-  const [period, setPeriod] = useState('1d')
+  const [period, setPeriod]   = useState('1d')
   const [hovered, setHovered] = useState(null)
+  const [overlays, setOverlays] = useState(DEFAULT_OVERLAYS)
+
+  const { symbol, ictSymbol } = SYMBOLS[symbolIndex]
 
   const chartContainerRef = useRef(null)
-  const chartRef = useRef(null)
-  const candleSeriesRef = useRef(null)
-  const volumeSeriesRef = useRef(null)
-  const vwapSeriesRef = useRef(null)
-  const priceLinesRef = useRef([])
+  const chartRef      = useRef(null)
+  const candleRef     = useRef(null)
+  const volumeRef     = useRef(null)
+  const vwapRef       = useRef(null)
+  const sessionLinesRef = useRef([])
+  const ictLinesRef   = useRef([])
 
-  // When interval changes, reset period to first valid option
-  const handleIntervalChange = useCallback((newInterval) => {
-    setInterval(newInterval)
-    const validPeriods = INTERVAL_PERIODS[newInterval]?.periods || []
-    if (validPeriods.length > 0) setPeriod(validPeriods[0])
+  const handleIntervalChange = useCallback((iv) => {
+    setInterval(iv)
+    const first = INTERVAL_PERIODS[iv]?.periods[0]
+    if (first) setPeriod(first)
   }, [])
 
   const validPeriods = INTERVAL_PERIODS[interval]?.periods || []
-  const isIntraday = ['1m', '5m', '15m', '30m', '1h'].includes(interval)
+  const isIntraday   = ['1m', '5m', '15m', '30m', '1h'].includes(interval)
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['chart', symbol, interval, period],
@@ -56,203 +61,214 @@ export default function Charts() {
     staleTime: 30_000,
   })
 
-  // Create chart once on mount
+  const { data: ictData } = useQuery({
+    queryKey: ['chart-ict', ictSymbol],
+    queryFn: () => apiFetch(`/api/ict/analysis?symbol=${ictSymbol}`),
+    enabled: !!ictSymbol,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+
+  // ── Create chart once on mount ───────────────────────────────────────────
   useEffect(() => {
     if (!chartContainerRef.current) return
 
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
       height: 500,
-      layout: {
-        background: { type: 'solid', color: '#0D0F14' },
-        textColor: '#94A3B8',
-      },
-      grid: {
-        vertLines: { color: '#1E2129' },
-        horzLines: { color: '#1E2129' },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-      },
-      rightPriceScale: {
-        borderColor: '#1E2129',
-      },
-      timeScale: {
-        borderColor: '#1E2129',
-        timeVisible: true,
-        secondsVisible: false,
-      },
+      layout: { background: { type: 'solid', color: '#0D0F14' }, textColor: '#94A3B8' },
+      grid:   { vertLines: { color: '#1E2129' }, horzLines: { color: '#1E2129' } },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#1E2129' },
+      timeScale: { borderColor: '#1E2129', timeVisible: true, secondsVisible: false },
     })
 
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: '#10B981',
-      downColor: '#EF4444',
-      borderUpColor: '#10B981',
-      borderDownColor: '#EF4444',
-      wickUpColor: '#10B981',
-      wickDownColor: '#EF4444',
+    const candle = chart.addCandlestickSeries({
+      upColor: '#10B981', downColor: '#EF4444',
+      borderUpColor: '#10B981', borderDownColor: '#EF4444',
+      wickUpColor: '#10B981', wickDownColor: '#EF4444',
     })
 
-    const volumeSeries = chart.addHistogramSeries({
+    const volume = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     })
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 },
+    volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } })
+
+    const vwap = chart.addLineSeries({
+      color: '#F59E0B', lineWidth: 2, title: 'VWAP',
+      priceLineVisible: false, lastValueVisible: true,
     })
 
-    const vwapSeries = chart.addLineSeries({
-      color: '#F59E0B',
-      lineWidth: 2,
-      title: 'VWAP',
-      priceLineVisible: false,
-      lastValueVisible: true,
-    })
+    chartRef.current  = chart
+    candleRef.current = candle
+    volumeRef.current = volume
+    vwapRef.current   = vwap
 
-    chartRef.current = chart
-    candleSeriesRef.current = candleSeries
-    volumeSeriesRef.current = volumeSeries
-    vwapSeriesRef.current = vwapSeries
-
-    // Subscribe to crosshair move for OHLCV hover info
     chart.subscribeCrosshairMove((param) => {
-      if (!param.time || !param.seriesData) {
-        setHovered(null)
-        return
-      }
-      const candle = param.seriesData.get(candleSeries)
-      if (candle) {
-        const volBar = param.seriesData.get(volumeSeries)
-        setHovered({
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-          volume: volBar?.value ?? null,
-          time: param.time,
-        })
+      if (!param.time || !param.seriesData) { setHovered(null); return }
+      const c = param.seriesData.get(candle)
+      if (c) {
+        const v = param.seriesData.get(volume)
+        setHovered({ open: c.open, high: c.high, low: c.low, close: c.close, volume: v?.value ?? null, time: param.time })
       }
     })
 
-    // ResizeObserver
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        chart.applyOptions({ width: entry.contentRect.width })
-      }
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) chart.applyOptions({ width: e.contentRect.width })
     })
-    resizeObserver.observe(chartContainerRef.current)
+    ro.observe(chartContainerRef.current)
 
     return () => {
-      resizeObserver.disconnect()
+      ro.disconnect()
       chart.remove()
-      chartRef.current = null
-      candleSeriesRef.current = null
-      volumeSeriesRef.current = null
-      vwapSeriesRef.current = null
+      chartRef.current = candleRef.current = volumeRef.current = vwapRef.current = null
     }
   }, [])
 
-  // Update data when query result changes
+  // ── Update candles + VWAP ────────────────────────────────────────────────
   useEffect(() => {
-    if (!data || !candleSeriesRef.current || !volumeSeriesRef.current || !vwapSeriesRef.current) return
+    if (!data || !candleRef.current) return
 
     const bars = (data.bars || [])
       .filter((b) => b.open != null && b.high != null && b.low != null && b.close != null)
-      .map((b) => ({
-        time: toUnixSeconds(b.time),
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-      }))
+      .map((b) => ({ time: toUnix(b.time), open: b.open, high: b.high, low: b.low, close: b.close }))
       .sort((a, b) => a.time - b.time)
 
-    const volumeBars = (data.bars || [])
+    const vols = (data.bars || [])
       .filter((b) => b.open != null && b.close != null)
-      .map((b) => ({
-        time: toUnixSeconds(b.time),
-        value: b.volume || 0,
-        color: b.close >= b.open ? '#10B981cc' : '#EF4444cc',
-      }))
+      .map((b) => ({ time: toUnix(b.time), value: b.volume || 0, color: b.close >= b.open ? '#10B981cc' : '#EF4444cc' }))
       .sort((a, b) => a.time - b.time)
 
-    try {
-      candleSeriesRef.current.setData(bars)
-      volumeSeriesRef.current.setData(volumeBars)
-    } catch (e) {
-      console.error('Error setting candle/volume data:', e)
-    }
+    try { candleRef.current.setData(bars) }   catch (e) { console.error(e) }
+    try { volumeRef.current.setData(vols) }   catch (e) { console.error(e) }
 
-    // VWAP
     const vwapBars = (data.vwap_data || [])
-      .map((v) => ({ time: toUnixSeconds(v.time), value: v.value }))
+      .map((v) => ({ time: toUnix(v.time), value: v.value }))
       .sort((a, b) => a.time - b.time)
+    try { vwapRef.current.setData(vwapBars) } catch (e) { console.error(e) }
 
-    try {
-      vwapSeriesRef.current.setData(vwapBars)
-    } catch (e) {
-      console.error('Error setting VWAP data:', e)
-    }
+    if (chartRef.current) chartRef.current.timeScale().fitContent()
+  }, [data])
 
-    // Remove old price lines
-    priceLinesRef.current.forEach((pl) => {
-      try { candleSeriesRef.current.removePriceLine(pl) } catch (_) {}
+  // ── Draw all price lines: session levels + ICT overlays ─────────────────
+  useEffect(() => {
+    if (!candleRef.current) return
+
+    // Clear old lines
+    ;[...sessionLinesRef.current, ...ictLinesRef.current].forEach((pl) => {
+      try { candleRef.current.removePriceLine(pl) } catch (_) {}
     })
-    priceLinesRef.current = []
+    sessionLinesRef.current = []
+    ictLinesRef.current     = []
 
-    // Session level lines
-    const levels = data.session_levels || {}
-    const levelDefs = [
-      { key: 'asia_high',      label: 'Asia H',    color: '#3B82F6', style: LineStyle.Dashed },
-      { key: 'asia_low',       label: 'Asia L',    color: '#3B82F6', style: LineStyle.Dashed },
-      { key: 'london_high',    label: 'London H',  color: '#F97316', style: LineStyle.Dashed },
-      { key: 'london_low',     label: 'London L',  color: '#F97316', style: LineStyle.Dashed },
-      { key: 'prev_day_high',  label: 'PDH',       color: '#6B7280', style: LineStyle.Dotted },
-      { key: 'prev_day_low',   label: 'PDL',       color: '#6B7280', style: LineStyle.Dotted },
-      { key: 'today_high',     label: "Today H",   color: '#E2E8F0', style: LineStyle.Solid },
-      { key: 'today_low',      label: "Today L",   color: '#E2E8F0', style: LineStyle.Solid },
-    ]
-
-    levelDefs.forEach(({ key, label, color, style }) => {
-      const price = levels[key]
+    const addLine = (ref, price, color, label, style, width = 1) => {
       if (price == null) return
       try {
-        const pl = candleSeriesRef.current.createPriceLine({
-          price,
-          color,
-          lineWidth: 1,
-          lineStyle: style,
-          axisLabelVisible: true,
-          title: label,
-        })
-        priceLinesRef.current.push(pl)
-      } catch (e) {
-        console.error('Error creating price line:', e)
-      }
-    })
-
-    // Fit chart to show all data
-    if (chartRef.current) {
-      chartRef.current.timeScale().fitContent()
+        const pl = candleRef.current.createPriceLine({ price, color, lineWidth: width, lineStyle: style, axisLabelVisible: true, title: label })
+        ref.push(pl)
+      } catch (_) {}
     }
-  }, [data])
+
+    // Session levels — always visible and prominent (width 2, labeled clearly)
+    const lvl  = data?.session_levels   || {}
+    const ilvl = ictData?.session_levels || {}
+    const sl   = { ...ilvl, ...lvl }  // chart data wins when present
+
+    const SESSION_DEFS = [
+      { key: 'asia_high',     label: 'Asia H',   color: '#60A5FA', style: LineStyle.Dashed, w: 2 },
+      { key: 'asia_low',      label: 'Asia L',   color: '#60A5FA', style: LineStyle.Dashed, w: 2 },
+      { key: 'london_high',   label: 'London H', color: '#FB923C', style: LineStyle.Dashed, w: 2 },
+      { key: 'london_low',    label: 'London L', color: '#FB923C', style: LineStyle.Dashed, w: 2 },
+      { key: 'prev_day_high', label: 'PDH',      color: '#94A3B8', style: LineStyle.Solid,  w: 2 },
+      { key: 'prev_day_low',  label: 'PDL',      color: '#94A3B8', style: LineStyle.Solid,  w: 2 },
+      { key: 'today_high',    label: 'Today H',  color: '#F1F5F9', style: LineStyle.Solid,  w: 1 },
+      { key: 'today_low',     label: 'Today L',  color: '#F1F5F9', style: LineStyle.Solid,  w: 1 },
+    ]
+    SESSION_DEFS.forEach(({ key, label, color, style, w }) =>
+      addLine(sessionLinesRef.current, sl[key], color, label, style, w)
+    )
+
+    if (!ictData) return
+
+    // ── ICT overlays: only the most signal-rich, fewest lines ────────────────
+
+    // iFVGs first — these are the ENTRY zones, most important (max 2)
+    if (overlays.ifvg) {
+      ;(ictData.ifvgs || []).slice(0, 2).forEach((f) => {
+        addLine(ictLinesRef.current, f.top,    '#F59E0B', 'iFVG ↑', LineStyle.Solid, 2)
+        addLine(ictLinesRef.current, f.bottom, '#F59E0B', 'iFVG ↓', LineStyle.Solid, 2)
+      })
+    }
+
+    // DOL target — single most important line on the chart
+    if (overlays.dol) {
+      const dol = ictData.draw_on_liquidity
+      if (dol?.target && dol.direction !== 'neutral') {
+        const c = dol.direction === 'up' ? '#38BDF8' : '#F87171'
+        addLine(ictLinesRef.current, dol.target, c, `DOL ${dol.direction === 'up' ? '↑' : '↓'}`, LineStyle.Solid, 2)
+      }
+    }
+
+    // FVGs — only the 2 most recent unfilled per direction (4 lines max total)
+    if (overlays.fvg) {
+      const unfilled = (ictData.fair_value_gaps || []).filter((f) => !f.filled && !f.inverted)
+      const recentBull = unfilled.filter((f) => f.type === 'bullish').slice(-1)
+      const recentBear = unfilled.filter((f) => f.type === 'bearish').slice(-1)
+      ;[...recentBull, ...recentBear].forEach((f) => {
+        const c = f.type === 'bullish' ? '#10B98188' : '#EF444488'
+        addLine(ictLinesRef.current, f.top,    c, `FVG${f.type === 'bullish' ? '↑' : '↓'}`, LineStyle.Dashed)
+        addLine(ictLinesRef.current, f.bottom, c, `FVG${f.type === 'bullish' ? '↑' : '↓'}`, LineStyle.Dashed)
+      })
+    }
+
+    // Order Blocks — 1 bullish (demand) + 1 bearish (supply), closest to price
+    if (overlays.ob) {
+      const price = data?.bars?.at(-1)?.close
+      const sortByCloseness = (arr) => price
+        ? [...arr].sort((a, b) => Math.abs(a.mid - price) - Math.abs(b.mid - price))
+        : arr
+      const bestBull = sortByCloseness(ictData.order_blocks?.bullish || []).slice(0, 1)
+      const bestBear = sortByCloseness(ictData.order_blocks?.bearish || []).slice(0, 1)
+      bestBull.forEach((ob) => {
+        addLine(ictLinesRef.current, ob.high, '#10B981', 'Demand H', LineStyle.Solid, 1)
+        addLine(ictLinesRef.current, ob.low,  '#10B981', 'Demand L', LineStyle.Solid, 1)
+      })
+      bestBear.forEach((ob) => {
+        addLine(ictLinesRef.current, ob.high, '#EF4444', 'Supply H', LineStyle.Solid, 1)
+        addLine(ictLinesRef.current, ob.low,  '#EF4444', 'Supply L', LineStyle.Solid, 1)
+      })
+    }
+
+    // Equal H/L — only the strongest cluster (highest count) for each side
+    if (overlays.eql) {
+      const ehl = ictData.equal_highs_lows || {}
+      const topH = [...(ehl.equal_highs || [])].sort((a, b) => b.count - a.count).slice(0, 1)
+      const topL = [...(ehl.equal_lows  || [])].sort((a, b) => b.count - a.count).slice(0, 1)
+      topH.forEach((e) => addLine(ictLinesRef.current, e.level, '#A78BFA', `EQH ×${e.count}`, LineStyle.Dotted, 2))
+      topL.forEach((e) => addLine(ictLinesRef.current, e.level, '#A78BFA', `EQL ×${e.count}`, LineStyle.Dotted, 2))
+    }
+  }, [data, ictData, overlays])
 
   const isUp = hovered ? hovered.close >= hovered.open : true
 
+  function toggleOverlay(key) {
+    setOverlays((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      {/* Header controls */}
+      {/* Header row 1: symbol · interval · period */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="text-terminal-blue font-bold text-sm">CHARTS</div>
 
-        {/* Symbol selector */}
         <div className="flex gap-1">
-          {SYMBOLS.map((s) => (
+          {SYMBOLS.map((s, i) => (
             <button
               key={s.symbol}
-              onClick={() => setSymbol(s.symbol)}
+              onClick={() => setSymbolIndex(i)}
               className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                symbol === s.symbol
+                symbolIndex === i
                   ? 'bg-terminal-blue text-white'
                   : 'bg-terminal-card text-terminal-muted hover:text-terminal-text border border-terminal-border'
               }`}
@@ -264,7 +280,6 @@ export default function Charts() {
 
         <div className="w-px h-5 bg-terminal-border" />
 
-        {/* Interval buttons */}
         <div className="flex gap-1">
           {Object.entries(INTERVAL_PERIODS).map(([iv, { label }]) => (
             <button
@@ -283,7 +298,6 @@ export default function Charts() {
 
         <div className="w-px h-5 bg-terminal-border" />
 
-        {/* Period buttons */}
         <div className="flex gap-1">
           {validPeriods.map((p) => (
             <button
@@ -300,14 +314,42 @@ export default function Charts() {
           ))}
         </div>
 
-        {/* Bar count + loading */}
         <div className="ml-auto flex items-center gap-2 text-xs text-terminal-muted">
           {isFetching && <span className="animate-pulse text-terminal-yellow">updating...</span>}
-          {data?.bar_count != null && (
-            <span>{data.bar_count} bars</span>
-          )}
+          {data?.bar_count != null && <span>{data.bar_count} bars</span>}
         </div>
       </div>
+
+      {/* Header row 2: ICT overlay toggles */}
+      {ictSymbol ? (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] text-terminal-muted uppercase tracking-wider">ICT Overlays</span>
+          {[
+            { key: 'fvg',  label: 'FVG',     activeColor: 'border-green-500/50 text-green-400 bg-green-500/10' },
+            { key: 'ifvg', label: 'iFVG',    activeColor: 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10' },
+            { key: 'ob',   label: 'OB',      activeColor: 'border-blue-500/50 text-blue-400 bg-blue-500/10' },
+            { key: 'eql',  label: 'EQL/EQH', activeColor: 'border-purple-500/50 text-purple-400 bg-purple-500/10' },
+            { key: 'dol',  label: 'DOL',     activeColor: 'border-cyan-500/50 text-cyan-400 bg-cyan-500/10' },
+          ].map(({ key, label, activeColor }) => (
+            <button
+              key={key}
+              onClick={() => toggleOverlay(key)}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+                overlays[key]
+                  ? activeColor
+                  : 'border-terminal-border text-terminal-muted bg-terminal-card'
+              }`}
+            >
+              {overlays[key] ? '✓ ' : ''}{label}
+            </button>
+          ))}
+          {ictData?.draw_on_liquidity?.direction && ictData.draw_on_liquidity.direction !== 'neutral' && (
+            <span className="text-[10px] text-terminal-muted ml-2">
+              DOL → {ictData.draw_on_liquidity.reason}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* OHLCV hover strip */}
       <div className="flex items-center gap-4 px-3 py-1.5 bg-terminal-card border border-terminal-border rounded text-xs font-mono h-8">
@@ -333,7 +375,7 @@ export default function Charts() {
         )}
       </div>
 
-      {/* Chart container */}
+      {/* Chart */}
       <div className="relative bg-terminal-card border border-terminal-border rounded overflow-hidden">
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-terminal-bg/80 z-10">
@@ -347,41 +389,62 @@ export default function Charts() {
       </div>
 
       {/* Session levels info bar */}
-      {data?.session_levels && Object.keys(data.session_levels).length > 0 && (
+      {(data?.session_levels || ictData?.session_levels) && (
         <div className="flex items-center gap-4 px-3 py-2 bg-terminal-card border border-terminal-border rounded text-xs flex-wrap">
           <span className="text-terminal-muted font-medium shrink-0">Session Levels:</span>
-          {data.session_levels.asia_high && (
+          {(() => {
+            const sl = { ...(ictData?.session_levels || {}), ...(data?.session_levels || {}) }
+            return (
+              <>
+                {sl.asia_high   && <span><span className="text-blue-400">Asia</span> <span className="text-terminal-text">{fmt.num(sl.asia_high)} / {fmt.num(sl.asia_low)}</span></span>}
+                {sl.london_high && <span><span className="text-orange-400">London</span> <span className="text-terminal-text">{fmt.num(sl.london_high)} / {fmt.num(sl.london_low)}</span></span>}
+                {sl.prev_day_high && <span><span className="text-terminal-muted">PDH/PDL</span> <span className="text-terminal-green">{fmt.num(sl.prev_day_high)}</span> / <span className="text-terminal-red">{fmt.num(sl.prev_day_low)}</span></span>}
+                {sl.today_high  && <span><span className="text-terminal-text font-medium">Today</span> <span className="text-terminal-green">{fmt.num(sl.today_high)}</span> / <span className="text-terminal-red">{fmt.num(sl.today_low)}</span></span>}
+              </>
+            )
+          })()}
+          {isIntraday && data?.vwap_data?.length > 0 && (
+            <span><span className="text-yellow-400">VWAP</span> <span className="text-terminal-text">{fmt.num(data.vwap_data[data.vwap_data.length - 1]?.value)}</span></span>
+          )}
+        </div>
+      )}
+
+      {/* ICT signal summary bar */}
+      {ictData && (
+        <div className="flex items-center gap-4 px-3 py-2 bg-terminal-card border border-terminal-border rounded text-xs flex-wrap">
+          <span className="text-terminal-muted font-medium shrink-0">ICT Signals:</span>
+          {ictData.summary && (
+            <>
+              <span><span className="text-green-400">FVG↑</span> <span className="text-terminal-text">{ictData.summary.unfilled_bullish ?? 0}</span></span>
+              <span><span className="text-red-400">FVG↓</span> <span className="text-terminal-text">{ictData.summary.unfilled_bearish ?? 0}</span></span>
+              <span><span className="text-yellow-400">iFVG</span> <span className="text-terminal-text">{ictData.summary.ifvg_count ?? 0}</span></span>
+              <span><span className="text-blue-400">OB</span> <span className="text-terminal-text">{ictData.summary.total_obs ?? 0}</span></span>
+            </>
+          )}
+          {ictData.discount_premium?.zone && (
             <span>
-              <span className="text-blue-400">Asia</span>{' '}
-              <span className="text-terminal-text">{fmt.num(data.session_levels.asia_high)} / {fmt.num(data.session_levels.asia_low)}</span>
+              <span className="text-terminal-muted">Zone</span>{' '}
+              <span className={ictData.discount_premium.zone === 'discount' ? 'text-green-400' : 'text-red-400'}>
+                {ictData.discount_premium.zone.toUpperCase()} ({ictData.discount_premium.position_pct?.toFixed(1)}%)
+              </span>
             </span>
           )}
-          {data.session_levels.london_high && (
+          {ictData.draw_on_liquidity?.direction && ictData.draw_on_liquidity.direction !== 'neutral' && (
             <span>
-              <span className="text-orange-400">London</span>{' '}
-              <span className="text-terminal-text">{fmt.num(data.session_levels.london_high)} / {fmt.num(data.session_levels.london_low)}</span>
+              <span className="text-cyan-400">DOL</span>{' '}
+              <span className="text-terminal-text">{ictData.draw_on_liquidity.direction === 'up' ? '↑' : '↓'} {fmt.num(ictData.draw_on_liquidity.target)}</span>
+              <span className="text-terminal-muted ml-1">— {ictData.draw_on_liquidity.reason}</span>
             </span>
           )}
-          {data.session_levels.prev_day_high && (
-            <span>
-              <span className="text-terminal-muted">Prev Day</span>{' '}
-              <span className="text-terminal-text">{fmt.num(data.session_levels.prev_day_high)} / {fmt.num(data.session_levels.prev_day_low)}</span>
+          <span>
+            <span className={ictData.long_setup?.grade === 'A+' || ictData.long_setup?.grade === 'A' ? 'text-green-400' : 'text-terminal-muted'}>
+              Long {ictData.long_setup?.grade ?? '--'}
             </span>
-          )}
-          {data.session_levels.today_high && (
-            <span>
-              <span className="text-terminal-text font-medium">Today</span>{' '}
-              <span className="text-terminal-green">{fmt.num(data.session_levels.today_high)}</span>
-              <span className="text-terminal-muted"> / </span>
-              <span className="text-terminal-red">{fmt.num(data.session_levels.today_low)}</span>
+            {' / '}
+            <span className={ictData.short_setup?.grade === 'A+' || ictData.short_setup?.grade === 'A' ? 'text-red-400' : 'text-terminal-muted'}>
+              Short {ictData.short_setup?.grade ?? '--'}
             </span>
-          )}
-          {isIntraday && data.vwap_data?.length > 0 && (
-            <span>
-              <span className="text-yellow-400">VWAP</span>{' '}
-              <span className="text-terminal-text">{fmt.num(data.vwap_data[data.vwap_data.length - 1]?.value)}</span>
-            </span>
-          )}
+          </span>
         </div>
       )}
     </div>

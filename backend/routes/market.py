@@ -158,7 +158,15 @@ async def market_chart(
 ):
     try:
         bars = get_chart_bars(symbol, interval, period)
-        session_levels = extract_session_levels(bars)
+
+        # For 1-day periods the dataset only contains today's bars, so
+        # extract_session_levels can't find yesterday's bars to compute PDH/PDL.
+        # Fetch a wider 5-day window at 15m resolution (fast) just for the level calc.
+        if period == "1d" and interval in INTRADAY_INTERVALS:
+            session_bars = get_chart_bars(symbol, "15m", "5d")
+            session_levels = extract_session_levels(session_bars)
+        else:
+            session_levels = extract_session_levels(bars)
 
         vwap_data = []
         if interval in INTRADAY_INTERVALS and bars:

@@ -553,25 +553,47 @@ function TradeSetupCard({ setup, symbol, instrument, isLoading, balance, setBala
         <AccountInputs balance={balance} setBalance={setBalance} prevClose={prevClose} setPrevClose={setPrevClose} onRecalc={onRecalc}/>
       )}
 
+      {/* Current price + distance to entry */}
+      {setup.current_inst != null && (
+        <div className="flex items-center justify-between px-3 py-2 rounded bg-terminal-bg border border-terminal-border/50 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-terminal-muted">Current {instrument}</span>
+            <span className="font-mono font-bold text-terminal-text text-base">{setup.current_inst}</span>
+          </div>
+          {setup.pts_to_entry != null && (
+            <div className={clsx('font-mono text-xs px-2 py-0.5 rounded', Math.abs(setup.pts_to_entry) < 5 ? 'text-terminal-yellow bg-terminal-yellow/10' : 'text-terminal-muted')}>
+              {isLong
+                ? setup.pts_to_entry < 0
+                  ? `↓ ${Math.abs(setup.pts_to_entry)} pts pullback to entry`
+                  : `↑ ${setup.pts_to_entry} pts rally needed (wait)`
+                : setup.pts_to_entry > 0
+                  ? `↑ ${setup.pts_to_entry} pts rally to entry`
+                  : `↓ ${Math.abs(setup.pts_to_entry)} pts drop needed (wait)`
+              }
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Entry / Stop / Target — big numbers */}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-border/50">
           <div className="text-xs text-terminal-muted mb-1">ENTRY</div>
           <div className="font-mono font-bold text-terminal-blue text-xl">{setup.entry_inst}</div>
           <div className="text-xs text-terminal-muted mt-0.5">{instrument} pts</div>
-          <div className="text-xs text-terminal-muted opacity-60">{symbol} ${setup.entry_proxy}</div>
+          <div className="text-xs text-terminal-muted opacity-60">{symbol} {setup.entry_proxy}</div>
         </div>
         <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-red/30">
           <div className="text-xs text-terminal-red mb-1">STOP</div>
           <div className="font-mono font-bold text-terminal-red text-xl">{setup.stop_inst}</div>
           <div className="text-xs text-terminal-muted mt-0.5">{setup.stop_dist_inst} pts risk</div>
-          <div className="text-xs text-terminal-muted opacity-60">{symbol} ${setup.stop_proxy}</div>
+          <div className="text-xs text-terminal-muted opacity-60">{symbol} {setup.stop_proxy}</div>
         </div>
         <div className="bg-terminal-bg rounded-lg p-3 border border-terminal-green/30">
           <div className="text-xs text-terminal-green mb-1">TARGET</div>
           <div className="font-mono font-bold text-terminal-green text-xl">{setup.target_inst}</div>
           <div className="text-xs text-terminal-muted mt-0.5">{setup.target_dist_inst} pts gain</div>
-          <div className="text-xs text-terminal-muted opacity-60">{symbol} ${setup.target_proxy}</div>
+          <div className="text-xs text-terminal-muted opacity-60">{symbol} {setup.target_proxy}</div>
         </div>
       </div>
 
@@ -642,7 +664,7 @@ function AccountInputs({ balance, setBalance, prevClose, setPrevClose, onRecalc 
 const SYMBOLS = [
   { value: 'QQQ', label: 'QQQ → MNQ', secondary: 'SPY', instrument: 'MNQ' },
   { value: 'SPY', label: 'SPY → MES', secondary: 'QQQ', instrument: 'MES' },
-  { value: 'GC=F', label: 'Gold → MGC', secondary: 'SI=F', instrument: 'MGC' },
+  { value: 'GC=F', label: 'Gold → MGC', secondary: 'GLD', instrument: 'MGC' },
 ]
 
 export default function ICT() {

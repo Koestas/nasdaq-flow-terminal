@@ -29,7 +29,11 @@ async def _get_bars(symbol: str = "QQQ") -> list:
                 return bars
         except Exception:
             pass
-    return yahoo.get_intraday(symbol, interval="5m")
+    # Try 1-day first; futures (NQ=F, GC=F) often return nothing on weekends → fall back to 5d
+    bars = yahoo.get_intraday(symbol, interval="5m")
+    if not bars:
+        bars = yahoo.get_chart_bars(symbol, "5m", "5d")
+    return bars
 
 
 @router.get("/analysis")

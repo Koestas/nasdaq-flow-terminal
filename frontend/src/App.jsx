@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
+import NewsTicker from './components/NewsTicker'
 import ErrorBoundary from './components/ErrorBoundary'
 import Overview from './pages/Overview'
 import Wave from './pages/Wave'
@@ -18,14 +19,17 @@ import Diagnostics from './pages/Diagnostics'
 import ICT from './pages/ICT'
 import Risk from './pages/Risk'
 import Charts from './pages/Charts'
+import Learn from './pages/Learn'
 
 export default function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-terminal-bg">
         <TopBar />
+        <NewsTicker />
         <Sidebar />
-        <main className="pt-12 pl-44 min-h-screen transition-all duration-200">
+        {/* pt-[76px] = 48px TopBar + 28px NewsTicker */}
+        <main className="pt-[76px] pl-44 min-h-screen transition-all duration-200">
           <div className="p-4 max-w-[1600px] mx-auto">
             <ErrorBoundary>
               <Routes>
@@ -45,6 +49,7 @@ export default function App() {
                 <Route path="/ict" element={<ICT />} />
                 <Route path="/risk" element={<Risk />} />
                 <Route path="/charts" element={<Charts />} />
+                <Route path="/learn" element={<Learn />} />
                 <Route path="*" element={<Overview />} />
               </Routes>
             </ErrorBoundary>
