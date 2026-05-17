@@ -664,8 +664,196 @@ const SYMBOLS = [
   { value: 'GC=F', label: 'MGC', secondary: 'GLD', instrument: 'MGC' },
 ]
 
+// ── Multi-Timeframe Confluence Panel ─────────────────────────────────────────
+function ConfluencePanel({ data, isLoading, symbol }) {
+  if (isLoading) return (
+    <div className="flex items-center justify-center h-40 text-terminal-muted text-sm animate-pulse">
+      Fetching 1H → 15m → 5m data…
+    </div>
+  )
+  if (!data) return (
+    <div className="flex items-center justify-center h-40 text-terminal-muted text-sm">
+      Click Multi-TF to load confluence
+    </div>
+  )
+
+  const TF_ORDER = ['1h', '15m', '5m']
+  const TF_ROLE  = { '1h': 'Macro Bias', '15m': 'Zone / FVG', '5m': 'Entry Signal' }
+
+  const alignColor = data.align_dir === 'bullish' ? 'border-terminal-green/40 bg-terminal-green/5 text-terminal-green'
+                   : data.align_dir === 'bearish' ? 'border-terminal-red/40 bg-terminal-red/5 text-terminal-red'
+                   : 'border-terminal-border bg-terminal-card text-terminal-muted'
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Alignment verdict */}
+      <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border font-bold text-sm ${alignColor}`}>
+        <span className="text-xl">{data.align_dir === 'bullish' ? '▲' : data.align_dir === 'bearish' ? '▼' : '◆'}</span>
+        <span>{data.alignment}</span>
+      </div>
+
+      {/* Timeframe matrix */}
+      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        {TF_ORDER.map(tf => {
+          const d = (data.timeframes || {})[tf]
+          if (!d || d.error) return (
+            <div key={tf} className="bg-terminal-card border border-terminal-border rounded-lg p-3">
+              <div className="text-xs text-terminal-muted">{tf.toUpperCase()} — no data</div>
+            </div>
+          )
+
+          const biasColor = d.bias === 'bullish' ? 'text-terminal-green' : d.bias === 'bearish' ? 'text-terminal-red' : 'text-terminal-muted'
+          const biasArrow = d.bias === 'bullish' ? '▲' : d.bias === 'bearish' ? '▼' : '◆'
+          const gradeColor = d.grade === 'A+' ? 'text-green-400' : d.grade === 'A' ? 'text-blue-400' : 'text-terminal-muted'
+          const borderColor = d.bias === 'bullish' ? 'border-terminal-green/30' : d.bias === 'bearish' ? 'border-terminal-red/30' : 'border-terminal-border'
+
+          return (
+            <div key={tf} className={`bg-terminal-card border rounded-lg p-3 flex flex-col gap-2 ${borderColor}`}>
+              {/* TF header */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-terminal-text text-sm">{tf.toUpperCase()}</span>
+                  <span className="text-[10px] text-terminal-muted ml-2">{TF_ROLE[tf]}</span>
+                </div>
+                <span className={`font-mono font-bold text-lg ${biasColor}`}>{biasArrow}</span>
+              </div>
+
+              {/* Bias + Grade */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-xs font-bold uppercase ${biasColor}`}>{d.bias}</span>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                  d.grade === 'A+' ? 'border-green-500/40 bg-green-500/10 text-green-400' :
+                  d.grade === 'A'  ? 'border-blue-500/40 bg-blue-500/10 text-blue-400' :
+                  'border-terminal-border bg-terminal-card text-terminal-muted'
+                }`}>{d.grade}</span>
+                {d.in_ote && <span className="text-[10px] text-yellow-400 border border-yellow-500/30 bg-yellow-500/10 px-1.5 py-0.5 rounded">IN OTE</span>}
+              </div>
+
+              {/* Structure */}
+              {d.structure && d.structure !== 'unknown' && (
+                <div className="text-[10px] text-terminal-muted">
+                  Structure: <span className="text-terminal-text">{d.structure.replace(/_/g,' ').toUpperCase()}</span>
+                </div>
+              )}
+
+              {/* PO3 phase */}
+              {d.po3_phase && (
+                <div className="text-[10px] text-terminal-muted">
+                  PO3: <span className={
+                    d.po3_phase === 'Manipulation' ? 'text-terminal-yellow' :
+                    d.po3_phase === 'Distribution'  ? 'text-terminal-green' : 'text-terminal-text'
+                  }>{d.po3_phase}</span>
+                </div>
+              )}
+
+              {/* Zone */}
+              {d.zone && (
+                <div className="text-[10px] text-terminal-muted">
+                  Zone: <span className={d.zone === 'discount' ? 'text-terminal-green' : 'text-terminal-red'}>
+                    {d.zone.toUpperCase()}
+                  </span>
+                  {d.zone_pct != null && <span className="text-terminal-muted ml-1">({d.zone_pct?.toFixed(0)}%)</span>}
+                </div>
+              )}
+
+              {/* DOL */}
+              {d.dol_direction && d.dol_direction !== 'neutral' && (
+                <div className="text-[10px] text-terminal-muted">
+                  DOL: <span className={d.dol_direction === 'up' ? 'text-terminal-green' : 'text-terminal-red'}>
+                    {d.dol_direction === 'up' ? '↑' : '↓'} {d.dol_target?.toFixed(2)}
+                  </span>
+                  <span className="text-terminal-muted ml-1 text-[9px] truncate"> — {d.dol_reason}</span>
+                </div>
+              )}
+
+              {/* Sweeps + iFVGs */}
+              <div className="flex gap-3 text-[10px] text-terminal-muted">
+                {d.sweep_count > 0 && (
+                  <span>Sweeps: <span className="text-terminal-yellow">{d.sweep_count}</span></span>
+                )}
+                {d.ifvg_count > 0 && (
+                  <span>iFVG: <span className="text-terminal-yellow">{d.ifvg_count}</span></span>
+                )}
+              </div>
+
+              {/* Most recent sweep label */}
+              {d.recent_sweep && (
+                <div className="text-[9px] text-terminal-muted border-t border-terminal-border/50 pt-1 mt-0.5 truncate">
+                  {d.recent_sweep.label}
+                </div>
+              )}
+
+              {/* Current price */}
+              {d.current_price != null && (
+                <div className="text-[10px] font-mono text-terminal-muted border-t border-terminal-border/50 pt-1 mt-0.5">
+                  Price: <span className="text-terminal-text">{d.current_price?.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Session levels summary */}
+      {data.timeframes?.['5m']?.session_levels && (() => {
+        const sl = data.timeframes['5m'].session_levels
+        return (
+          <div className="flex items-center gap-4 px-3 py-2 bg-terminal-card border border-terminal-border rounded text-xs flex-wrap">
+            <span className="text-terminal-muted font-medium">Session Levels (5m):</span>
+            {sl.asia_high   && <span><span className="text-blue-400">Asia</span> <span className="font-mono">{sl.asia_high?.toFixed(2)} / {sl.asia_low?.toFixed(2)}</span></span>}
+            {sl.london_high && <span><span className="text-orange-400">London</span> <span className="font-mono">{sl.london_high?.toFixed(2)} / {sl.london_low?.toFixed(2)}</span></span>}
+            {sl.prev_day_high && <span><span className="text-terminal-muted">PDH/PDL</span> <span className="font-mono text-terminal-green">{sl.prev_day_high?.toFixed(2)}</span> / <span className="font-mono text-terminal-red">{sl.prev_day_low?.toFixed(2)}</span></span>}
+          </div>
+        )
+      })()}
+
+      {/* Go/No-Go checklist */}
+      <div className="bg-terminal-card border border-terminal-border rounded-lg p-3">
+        <div className="text-[10px] text-terminal-muted uppercase tracking-wider mb-2">Go / No-Go Decision</div>
+        {(() => {
+          const h1 = data.timeframes?.['1h'] || {}
+          const m15 = data.timeframes?.['15m'] || {}
+          const m5  = data.timeframes?.['5m']  || {}
+          const checks = [
+            { label: '1H bias aligned with trade direction',   met: h1.bias !== 'neutral' },
+            { label: '15m structure confirms (CHoCH / MSS)',   met: m15.structure && !['unknown','bullish_structure','bearish_structure'].includes(m15.structure) },
+            { label: 'Price in correct zone (discount=long, premium=short)', met: (h1.bias === 'bullish' && m15.zone === 'discount') || (h1.bias === 'bearish' && m15.zone === 'premium') },
+            { label: 'Sweep detected on 15m or 5m',            met: (m15.sweep_count > 0) || (m5.sweep_count > 0) },
+            { label: 'iFVG entry zone present on 5m',          met: m5.ifvg_count > 0 },
+            { label: '5m setup grade A or A+',                 met: ['A+','A'].includes(m5.grade) },
+            { label: 'DOL target identified',                  met: m5.dol_direction && m5.dol_direction !== 'neutral' },
+          ]
+          const metCount = checks.filter(c => c.met).length
+          const go = metCount >= 5
+          return (
+            <>
+              <div className="space-y-1 mb-2">
+                {checks.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className={c.met ? 'text-terminal-green' : 'text-terminal-muted'}>
+                      {c.met ? '✓' : '○'}
+                    </span>
+                    <span className={c.met ? 'text-terminal-text' : 'text-terminal-muted'}>{c.label}</span>
+                  </div>
+                ))}
+              </div>
+              <div className={`text-xs font-bold px-2 py-1 rounded border inline-block ${
+                go ? 'text-terminal-green border-terminal-green/40 bg-terminal-green/10'
+                   : 'text-terminal-red border-terminal-red/40 bg-terminal-red/10'
+              }`}>
+                {go ? `✓ ${metCount}/7 — CONDITIONS MET, look for entry` : `${metCount}/7 — NOT READY, wait for more confluence`}
+              </div>
+            </>
+          )
+        })()}
+      </div>
+    </div>
+  )
+}
+
 export default function ICT() {
   const [symbolIdx, setSymbolIdx] = useState(0)
+  const [activeTab, setActiveTab] = useState('signals')   // 'signals' | 'confluence'
   const [tradeBalance, setTradeBalance] = useState('25000')
   const [tradePrevClose, setTradePrevClose] = useState('')
   const [tradeKey, setTradeKey] = useState(0)
@@ -681,6 +869,14 @@ export default function ICT() {
   const { data: adv, isLoading: advLoading } = useQuery({
     queryKey: ['ict-advanced', sym.value, sym.secondary],
     queryFn: () => apiFetch(`/api/ict/advanced?symbol=${sym.value}&secondary=${sym.secondary}`),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+
+  const { data: confluence, isLoading: confLoading } = useQuery({
+    queryKey: ['ict-confluence', sym.value],
+    queryFn: () => apiFetch(`/api/ict/confluence?symbol=${sym.value}`),
+    enabled: activeTab === 'confluence',
     refetchInterval: 60_000,
     staleTime: 30_000,
   })
@@ -741,12 +937,26 @@ export default function ICT() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Tab switcher */}
+          <div className="flex gap-1 border border-terminal-border rounded overflow-hidden">
+            {[['signals','Signals'],['confluence','Multi-TF']].map(([v,l]) => (
+              <button key={v} onClick={() => setActiveTab(v)}
+                className={`px-3 py-1 text-xs font-medium transition-colors ${
+                  activeTab === v ? 'bg-terminal-blue text-white' : 'bg-terminal-card text-terminal-muted hover:text-terminal-text'
+                }`}>{l}</button>
+            ))}
+          </div>
           {dataUpdatedAt && <span className="text-xs text-terminal-muted">{fmt.timeAgo(new Date(dataUpdatedAt).toISOString())}</span>}
           <button onClick={() => refetch()} className="flex items-center gap-1 text-xs text-terminal-blue hover:underline">
             <RefreshCw size={11}/> Refresh
           </button>
         </div>
       </div>
+
+      {/* ── Multi-TF Confluence Tab ──────────────────────────────────────────── */}
+      {activeTab === 'confluence' && (
+        <ConfluencePanel data={confluence} isLoading={confLoading} symbol={sym.value} />
+      )}
 
       {/* Status row */}
       {!isLoading && session && (

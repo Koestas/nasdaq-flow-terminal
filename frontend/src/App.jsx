@@ -20,6 +20,7 @@ import ICT from './pages/ICT'
 import Risk from './pages/Risk'
 import Charts from './pages/Charts'
 import Learn from './pages/Learn'
+import Backtest from './pages/Backtest'
 
 export default function App() {
   return (
@@ -50,6 +51,7 @@ export default function App() {
                 <Route path="/risk" element={<Risk />} />
                 <Route path="/charts" element={<Charts />} />
                 <Route path="/learn" element={<Learn />} />
+                <Route path="/backtest" element={<Backtest />} />
                 <Route path="*" element={<Overview />} />
               </Routes>
             </ErrorBoundary>

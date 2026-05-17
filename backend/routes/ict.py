@@ -153,3 +153,105 @@ async def trade_setup(
         "draw_on_liquidity": dol,
         "setup": setup,
     }
+
+
+@router.get("/confluence")
+async def ict_confluence(symbol: str = Query("NQ=F")):
+    """
+    Multi-timeframe ICT confluence matrix.
+    Returns ICT analysis for 1H → 15m → 5m so traders can
+    confirm top-down bias alignment in one API call.
+    """
+    from providers.yahoo import get_chart_bars
+
+    TF_CONFIG = [
+        {"interval": "1h",  "period": "1mo", "label": "1H  (Bias)"},
+        {"interval": "15m", "period": "5d",  "label": "15m (Zones)"},
+        {"interval": "5m",  "period": "5d",  "label": "5m  (Entry)"},
+    ]
+
+    result = {}
+    for tf in TF_CONFIG:
+        iv, pd, lbl = tf["interval"], tf["period"], tf["label"]
+        bars = get_chart_bars(symbol, iv, pd)
+        if not bars and pd == "5d":
+            bars = get_chart_bars(symbol, iv, "1mo")
+        if not bars:
+            result[iv] = {"label": lbl, "error": "no data"}
+            continue
+
+        sl    = extract_session_levels(bars)
+        ehl   = detect_equal_highs_lows(bars)
+        price = sl.get("current_price")
+        ana   = get_ict_analysis(bars, current_price=price)
+        long_sc  = ana.get("long_setup",  {}).get("score", 0)
+        short_sc = ana.get("short_setup", {}).get("score", 0)
+        bias  = ("bullish" if long_sc > short_sc
+                 else "bearish" if short_sc > long_sc else "neutral")
+
+        adv = get_advanced_signals(
+            bars=bars, session_levels=sl, equal_hl=ehl,
+            bars_secondary=[], bias_direction=bias,
+        )
+
+        ifvgs   = ana.get("ifvgs") or []
+        sweeps  = adv.get("liquidity_sweeps") or []
+        struct  = (adv.get("mss_choch") or {}).get("last_structure", "unknown")
+        po3     = (adv.get("po3_phase") or {}).get("phase_label", "")
+        dol     = ana.get("draw_on_liquidity") or {}
+        dp      = ana.get("discount_premium") or {}
+        in_ote  = adv.get("in_ote", False)
+
+        result[iv] = {
+            "label":       lbl,
+            "bias":        bias,
+            "long_score":  long_sc,
+            "short_score": short_sc,
+            "grade":       ana.get("long_setup" if bias == "bullish" else "short_setup", {}).get("grade", "--"),
+            "structure":   struct,
+            "po3_phase":   po3,
+            "zone":        dp.get("zone", ""),
+            "zone_pct":    dp.get("position_pct"),
+            "dol_direction": dol.get("direction", "neutral"),
+            "dol_target":  dol.get("target"),
+            "dol_reason":  dol.get("reason", ""),
+            "ifvg_count":  len(ifvgs),
+            "sweep_count": len(sweeps),
+            "recent_sweep": sweeps[-1] if sweeps else None,
+            "top_ifvg":    ifvgs[-1] if ifvgs else None,
+            "in_ote":      in_ote,
+            "current_price": price,
+            "session_levels": {
+                k: v for k, v in sl.items()
+                if v and k in ("asia_high", "asia_low", "london_high", "london_low",
+                               "prev_day_high", "prev_day_low", "today_high", "today_low")
+            },
+        }
+
+    # Overall alignment verdict
+    biases = [result[tf["interval"]]["bias"] for tf in TF_CONFIG
+              if "error" not in result.get(tf["interval"], {})]
+    bull_count = biases.count("bullish")
+    bear_count = biases.count("bearish")
+    if bull_count == 3:
+        alignment = "STRONG BULLISH — all timeframes aligned long"
+        align_dir = "bullish"
+    elif bear_count == 3:
+        alignment = "STRONG BEARISH — all timeframes aligned short"
+        align_dir = "bearish"
+    elif bull_count == 2:
+        alignment = "BULLISH lean — 2/3 timeframes agree, check 5m for entry"
+        align_dir = "bullish"
+    elif bear_count == 2:
+        alignment = "BEARISH lean — 2/3 timeframes agree, check 5m for entry"
+        align_dir = "bearish"
+    else:
+        alignment = "CONFLICTED — timeframes disagree, no trade"
+        align_dir = "neutral"
+
+    return {
+        "symbol":    symbol,
+        "alignment": alignment,
+        "align_dir": align_dir,
+        "timeframes": result,
+    }
