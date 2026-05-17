@@ -34,6 +34,12 @@ export default function TopBar() {
     refetchInterval: 30_000,
   })
 
+  const { data: futuresData } = useQuery({
+    queryKey: ['futures-prices'],
+    queryFn: () => apiFetch('/api/market/futures'),
+    refetchInterval: 30_000,
+  })
+
   const price = data?.price
   const bias = data?.bias
   const wave = data?.wave_summary
@@ -115,6 +121,20 @@ export default function TopBar() {
       </div>
 
       <div className="w-px h-6 bg-terminal-border shrink-0" />
+
+      {/* Futures: MNQ, MES, MGC */}
+      {futuresData && futuresData.map((f) => (
+        <div key={f.instrument} className="flex items-center gap-1 shrink-0">
+          <span className="text-terminal-muted">{f.instrument}</span>
+          <span className={`font-bold ${f.bullish ? 'text-terminal-green' : 'text-terminal-red'}`}>
+            {f.price != null ? fmt.num(Math.round(f.price)) : '--'}
+          </span>
+          <span className={f.bullish ? 'text-terminal-green' : 'text-terminal-red'}>
+            {fmt.pct(f.change_pct)}
+          </span>
+          <div className="w-px h-6 bg-terminal-border shrink-0 ml-2" />
+        </div>
+      ))}
 
       {/* Regime */}
       <div className="flex items-center gap-1 shrink-0">

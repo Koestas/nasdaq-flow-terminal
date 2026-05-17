@@ -1,8 +1,8 @@
-from fastapi import APIRouter
-from providers.yahoo import get_qqq_price, get_vwap, get_leadership_quotes, get_news, get_intraday
+from fastapi import APIRouter, Query
+from providers.yahoo import get_qqq_price, get_vwap, get_leadership_quotes, get_news, get_intraday, get_futures_quotes, get_chart_bars
 from engines.bias import BiasEngine
 from engines.stats import calc_wave, calc_gex, calc_top_flow, calc_unusual
-from engines.ict import get_session_context
+from engines.ict import get_session_context, extract_session_levels
 from providers.yahoo import get_options_chain
 
 router = APIRouter(prefix="/api/market", tags=["market"])
@@ -135,5 +135,81 @@ async def market_leadership():
 async def market_news():
     try:
         return {"news": get_news("QQQ")}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/futures")
+async def market_futures():
+    try:
+        return get_futures_quotes()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+INTRADAY_INTERVALS = {"1m", "5m", "15m", "30m", "1h"}
+
+
+@router.get("/chart")
+async def market_chart(
+    symbol: str = Query(default="NQ=F"),
+    interval: str = Query(default="5m"),
+    period: str = Query(default="1d"),
+):
+    try:
+        bars = get_chart_bars(symbol, interval, period)
+        session_levels = extract_session_levels(bars)
+
+        vwap_data = []
+        if interval in INTRADAY_INTERVALS and bars:
+            # Group bars by date, compute cumulative VWAP per day resetting at each new day
+            from datetime import timezone as _tz
+            import pytz
+            NY_TZ = pytz.timezone("America/New_York")
+
+            cum_tp_vol = 0.0
+            cum_vol = 0.0
+            current_day = None
+
+            for b in bars:
+                t_raw = b.get("time", "")
+                try:
+                    if t_raw.endswith("Z"):
+                        t_raw = t_raw[:-1] + "+00:00"
+                    from datetime import datetime as _dt
+                    dt_utc = _dt.fromisoformat(t_raw)
+                    dt_et = dt_utc.astimezone(NY_TZ)
+                except Exception:
+                    continue
+
+                bar_date = dt_et.date()
+
+                # Reset VWAP at each new trading day
+                if bar_date != current_day:
+                    current_day = bar_date
+                    cum_tp_vol = 0.0
+                    cum_vol = 0.0
+
+                o, h, l, c, v = b.get("open"), b.get("high"), b.get("low"), b.get("close"), b.get("volume", 0)
+                if None in (h, l, c) or v is None:
+                    continue
+
+                typical_price = (h + l + c) / 3
+                cum_tp_vol += typical_price * v
+                cum_vol += v
+
+                if cum_vol > 0:
+                    vwap_val = cum_tp_vol / cum_vol
+                    vwap_data.append({"time": b["time"], "value": round(vwap_val, 4)})
+
+        return {
+            "symbol": symbol,
+            "interval": interval,
+            "period": period,
+            "bars": bars,
+            "bar_count": len(bars),
+            "session_levels": session_levels,
+            "vwap_data": vwap_data,
+        }
     except Exception as e:
         return {"error": str(e)}

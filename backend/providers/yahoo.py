@@ -257,3 +257,61 @@ def get_news(ticker: str = "QQQ") -> list:
     # Sort newest first, cap at 25
     results.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
     return results[:25]
+
+
+FUTURES_MAP = [
+    {"symbol": "NQ=F", "instrument": "MNQ", "name": "Micro NQ", "dollars_per_point": 2.0},
+    {"symbol": "ES=F", "instrument": "MES", "name": "Micro ES", "dollars_per_point": 5.0},
+    {"symbol": "GC=F", "instrument": "MGC", "name": "Micro Gold", "dollars_per_point": 10.0},
+]
+
+
+def get_futures_quotes() -> list:
+    """Fetch live NQ=F, ES=F, GC=F prices."""
+    results = []
+    for spec in FUTURES_MAP:
+        sym = spec["symbol"]
+        try:
+            t = yf.Ticker(sym)
+            info = t.fast_info
+            price = _clean(float(info.last_price))
+            prev = _clean(float(info.previous_close))
+            chg = round(price - prev, 2) if price and prev else None
+            chg_pct = round((price - prev) / prev * 100, 2) if price and prev and prev != 0 else None
+            results.append({**spec, "price": price, "prev_close": prev, "change": chg, "change_pct": chg_pct, "bullish": chg_pct is not None and chg_pct > 0})
+        except Exception:
+            results.append({**spec, "price": None, "prev_close": None, "change": None, "change_pct": None, "bullish": None})
+    return results
+
+
+def get_chart_bars(symbol: str, interval: str = "5m", period: str = "1d") -> list:
+    """Return OHLCV bars for charting. Handles multi-level column names from yfinance."""
+    try:
+        df = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=True)
+        if df.empty:
+            return []
+        df = df.reset_index()
+        # yfinance sometimes returns MultiIndex columns — flatten them
+        if hasattr(df.columns, 'levels'):
+            df.columns = [c[0] if c[1] == '' or c[1] == symbol else c[0] for c in df.columns]
+        ts_col = "Datetime" if "Datetime" in df.columns else "Date"
+        bars = []
+        for _, row in df.iterrows():
+            ts = row[ts_col]
+            try:
+                o = _clean(float(row["Open"]))
+                h = _clean(float(row["High"]))
+                l = _clean(float(row["Low"]))
+                c = _clean(float(row["Close"]))
+                v = _clean(float(row["Volume"]))
+            except Exception:
+                continue
+            if None in (o, h, l, c):
+                continue
+            bars.append({
+                "time": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "open": o, "high": h, "low": l, "close": c, "volume": v or 0,
+            })
+        return bars
+    except Exception:
+        return []

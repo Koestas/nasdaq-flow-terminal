@@ -17,6 +17,7 @@ import Journal from './pages/Journal'
 import Diagnostics from './pages/Diagnostics'
 import ICT from './pages/ICT'
 import Risk from './pages/Risk'
+import Charts from './pages/Charts'
 
 export default function App() {
   return (
@@ -43,6 +44,7 @@ export default function App() {
                 <Route path="/diagnostics" element={<Diagnostics />} />
                 <Route path="/ict" element={<ICT />} />
                 <Route path="/risk" element={<Risk />} />
+                <Route path="/charts" element={<Charts />} />
                 <Route path="*" element={<Overview />} />
               </Routes>
             </ErrorBoundary>
