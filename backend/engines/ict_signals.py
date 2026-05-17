@@ -592,9 +592,15 @@ def get_advanced_signals(
 # ---------------------------------------------------------------------------
 
 _INSTRUMENT_CONFIG = {
-    "MNQ": {"multiplier": 1.0, "dollars_per_point": 2.0, "tick_size": 0.25, "stop_buffer": 10.0, "name": "Micro NQ"},
-    "MES": {"multiplier": 1.0, "dollars_per_point": 5.0, "tick_size": 0.25, "stop_buffer": 4.0,  "name": "Micro ES"},
-    "MGC": {"multiplier": 1.0, "dollars_per_point": 10.0, "tick_size": 0.1,  "stop_buffer": 3.0,  "name": "Micro Gold"},
+    # stop_buffer: points beyond sweep wick/iFVG boundary
+    # min_stop_pts: absolute floor — a tighter stop isn't executable on fast futures
+    # max_contracts: hard cap for this account size (Lucid 25k Pro, $1k daily limit)
+    "MNQ": {"multiplier": 1.0, "dollars_per_point": 2.0, "tick_size": 0.25,
+            "stop_buffer": 20.0, "min_stop_pts": 20.0, "max_contracts": 5, "name": "Micro NQ"},
+    "MES": {"multiplier": 1.0, "dollars_per_point": 5.0, "tick_size": 0.25,
+            "stop_buffer": 8.0,  "min_stop_pts": 8.0,  "max_contracts": 5, "name": "Micro ES"},
+    "MGC": {"multiplier": 1.0, "dollars_per_point": 10.0, "tick_size": 0.1,
+            "stop_buffer": 5.0,  "min_stop_pts": 5.0,  "max_contracts": 3, "name": "Micro Gold"},
 }
 
 
@@ -616,10 +622,12 @@ def calc_auto_trade_setup(
     if not config:
         return {"error": f"Unknown instrument: {instrument}"}
 
-    multiplier  = config["multiplier"]
-    usd_per_pt  = config["dollars_per_point"]
-    tick        = config["tick_size"]
-    stop_buffer = config["stop_buffer"]
+    multiplier    = config["multiplier"]
+    usd_per_pt    = config["dollars_per_point"]
+    tick          = config["tick_size"]
+    stop_buffer   = config["stop_buffer"]
+    min_stop_pts  = config["min_stop_pts"]
+    max_contracts = config["max_contracts"]
 
     def to_ticks(v):
         return round(round(v / tick) * tick, 4)
@@ -700,8 +708,13 @@ def calc_auto_trade_setup(
             stop_proxy = round(entry_proxy + stop_buffer, 2)
 
     stop_dist_proxy = round(abs(entry_proxy - stop_proxy), 4)
-    if stop_dist_proxy <= 0:
-        stop_dist_proxy = 0.5
+    # Enforce minimum stop distance — a tighter stop isn't executable on fast futures
+    if stop_dist_proxy < min_stop_pts:
+        stop_dist_proxy = min_stop_pts
+        if direction == "bullish":
+            stop_proxy = round(entry_proxy - min_stop_pts, 2)
+        else:
+            stop_proxy = round(entry_proxy + min_stop_pts, 2)
 
     # ---- Target from DOL (proxy price units) ----
     dol_target = dol.get("target") if dol else None
@@ -737,11 +750,14 @@ def calc_auto_trade_setup(
         contracts, risk_amount = 0, 0.0
         size_note = "No daily risk remaining — stop trading today"
     else:
-        budget = min(daily_risk_remaining * 0.15, 150.0, daily_risk_remaining * 0.5)
+        # Risk 10% of remaining daily limit per trade, hard cap at $150
+        # This leaves room for 5-8 trade attempts before hitting the daily loss limit
+        budget = min(daily_risk_remaining * 0.10, 150.0)
         risk_per_contract = stop_dist_inst * usd_per_pt
-        contracts = max(1, int(budget / risk_per_contract)) if risk_per_contract > 0 else 1
+        raw_contracts = int(budget / risk_per_contract) if risk_per_contract > 0 else 1
+        contracts = max(1, min(raw_contracts, max_contracts))
         risk_amount = round(contracts * risk_per_contract, 2)
-        size_note = f"{contracts} {instrument.upper()} · ${risk_amount:.0f} risk · stop {stop_dist_inst:.1f} pts"
+        size_note = f"{contracts} {instrument.upper()} · ${risk_amount:.0f} risk · {stop_dist_inst:.0f} pt stop"
 
     # ---- TP grid ----
     tp_levels = {}
