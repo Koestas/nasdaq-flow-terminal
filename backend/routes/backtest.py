@@ -13,7 +13,7 @@ import pytz
 import yfinance as yf
 
 from engines.ict import (get_ict_analysis, extract_session_levels,
-                         detect_equal_highs_lows, detect_fvg)
+                         detect_equal_highs_lows, detect_fvg, get_htf_bias)
 from engines.ict_signals import get_advanced_signals, _INSTRUMENT_CONFIG
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
@@ -98,12 +98,14 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
 
 # ── Per-day signal detection ──────────────────────────────────────────────────
 
-def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ", start_bar_index: int = 6) -> dict | None:
+def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ",
+                         start_bar_index: int = 6, htf_direction: str = "neutral",
+                         used_entries: list | None = None) -> dict | None:
     """
     Walk through the NY killzone bars one at a time; return the first
-    A or A+ setup with a sweep + iFVG. Accepts a start_bar_index so
-    a second attempt can skip past the first setup's entry bar.
-    Returns None if no qualifying setup found.
+    A or A+ setup with a sweep + iFVG.
+    htf_direction: daily bias — filters out contra-trend setups.
+    used_entries: entries already taken today — prevents re-entering the same FVG zone.
     """
     kz_bars = [
         b for b in day_bars
@@ -132,6 +134,12 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         if bias == "neutral":
             continue
 
+        # HTF filter: only trade in the direction of the daily trend
+        if htf_direction in ("bullish", "strong_bullish", "bullish_lean") and bias == "bearish":
+            continue
+        if htf_direction in ("bearish", "strong_bearish", "bearish_lean") and bias == "bullish":
+            continue
+
         adv = get_advanced_signals(
             bars=context, session_levels=sl, equal_hl=ehl,
             bars_secondary=[], bias_direction=bias,
@@ -149,21 +157,28 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
             continue
 
         setup_score = long_sc if bias == "bullish" else short_sc
-        grade = ("A+" if setup_score >= 80 else
-                 "A"  if setup_score >= 60 else
-                 "B"  if setup_score >= 40 else "C")
+        setup_obj   = analysis.get("long_setup" if bias == "bullish" else "short_setup", {})
+        grade       = setup_obj.get("grade") or (
+            "A+" if setup_score >= 75 else
+            "A"  if setup_score >= 55 else
+            "B"  if setup_score >= 35 else "C"
+        )
         if grade not in ("A+", "A"):
             continue
 
         # Build entry / stop / target in price units
         fvg     = min(aligned, key=lambda f: abs(f["mid"] - price))
-        entry   = fvg["bottom"] if bias == "bullish" else fvg["top"]
+        entry   = fvg["mid"]   # midpoint entry — less vulnerable to edge stop hunts
         config  = _INSTRUMENT_CONFIG.get(instrument, _INSTRUMENT_CONFIG["MNQ"])
         buf     = config["stop_buffer"]
         min_st  = config["min_stop_pts"]
 
         # Skip stale FVGs — price must be near the zone (within 3× the gap size)
         if abs(price - fvg["mid"]) > fvg["size"] * 3 + min_st:
+            continue
+
+        # Prevent re-entering the same FVG zone already used today
+        if used_entries and any(abs(entry - prev) < min_st for prev in used_entries):
             continue
 
         if bias == "bullish":
@@ -226,6 +241,9 @@ def run_backtest(
     if not bars_all:
         return {"error": f"No data returned for {symbol}"}
 
+    # Daily bars for HTF bias — go back 90 days so early backtest days have enough data
+    daily_bars_all = _download(symbol, end_dt - timedelta(days=90), end_dt, "1d")
+
     by_day  = _group_by_day(bars_all)
     trades  = []
     running_pnl  = 0.0
@@ -242,15 +260,23 @@ def run_backtest(
             prior_bars.extend(by_day[pd])
         prior_bars = prior_bars[-300:]  # keep last 300 bars as context
 
+        # HTF bias: use daily bars up to (but not including) this day
+        htf_bars = [b for b in daily_bars_all if b["time"][:10] < d.isoformat()]
+        htf_result = get_htf_bias(htf_bars) if len(htf_bars) >= 22 else {"bias": "neutral"}
+        htf_dir = htf_result.get("bias", "neutral")
+
         # Daily limit: 1 win = done; 2nd loss = done. Max 2 attempts per day.
         day_losses  = 0
         next_start  = 6   # bar index to resume search from
         day_traded  = False
+        used_entries: list = []   # FVG entry prices already traded today
 
         while day_losses < 2:
             setup = _find_killzone_setup(day_bars, prior_bars,
                                          instrument=instrument.upper(),
-                                         start_bar_index=next_start)
+                                         start_bar_index=next_start,
+                                         htf_direction=htf_dir,
+                                         used_entries=used_entries)
             if not setup:
                 break
 
@@ -271,6 +297,7 @@ def run_backtest(
                 "direction":   setup["direction"],
                 "grade":       setup["grade"],
                 "score":       setup["score"],
+                "htf_dir":     htf_dir,
                 "entry":       setup["entry"],
                 "stop":        setup["stop"],
                 "target":      setup["target"],
@@ -291,6 +318,7 @@ def run_backtest(
             if outcome["result"] == "win":
                 break  # protected the day — stop trading
             elif outcome["result"] == "loss":
+                used_entries.append(setup["entry"])
                 day_losses += 1
                 next_start = setup["bar_index"] + 1  # resume search after this bar
             else:

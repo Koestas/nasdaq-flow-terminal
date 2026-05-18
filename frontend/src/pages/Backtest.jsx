@@ -12,7 +12,6 @@ const PERIODS = [
   { value: 15, label: '15 days' },
   { value: 30, label: '30 days' },
   { value: 45, label: '45 days' },
-  { value: 60, label: '60 days' },
 ]
 
 function StatCard({ label, value, sub, color = 'text-terminal-text', icon }) {
@@ -150,7 +149,7 @@ export default function Backtest() {
       {/* Disclaimer */}
       <div className="flex items-start gap-2 px-3 py-2 bg-terminal-yellow/5 border border-terminal-yellow/20 rounded text-xs text-terminal-yellow/80">
         <AlertCircle size={12} className="shrink-0 mt-0.5" />
-        Simulated results using Yahoo Finance 5m data (15-20 min delayed). Up to 2 trades per day — first A/A+ setup in the 9:30–11:30 AM ET killzone. Win = done for the day. Lose once = try again. Lose twice = done. Past performance ≠ future results.
+        Simulated results using Yahoo Finance 5m data. Only takes trades aligned with the daily HTF bias (no contra-trend entries). Up to 2 attempts per day — second attempt only if a different FVG zone exists. Max 45 days (intraday data limit). Past performance ≠ future results.
       </div>
 
       {!data && !running && (
@@ -233,7 +232,7 @@ export default function Backtest() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-terminal-border bg-terminal-bg">
-                      {['Date', 'Dir', 'Grade', 'Entry', 'Stop', 'Target', 'Exit', 'Pts', 'P&L', 'RR', 'Result', 'Equity'].map(h => (
+                      {['Date', 'Dir', 'HTF', 'Grade', 'Entry', 'Stop', 'Target', 'Exit', 'Pts', 'P&L', 'RR', 'Result', 'Equity'].map(h => (
                         <th key={h} className="px-3 py-2 text-left text-terminal-muted font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -248,6 +247,14 @@ export default function Backtest() {
                           <td className="px-3 py-1.5">
                             <span className={t.direction === 'bullish' ? 'text-terminal-green font-bold' : 'text-terminal-red font-bold'}>
                               {t.direction === 'bullish' ? '▲ L' : '▼ S'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <span className={`text-[10px] font-bold ${
+                              t.htf_dir?.includes('bullish') ? 'text-terminal-green' :
+                              t.htf_dir?.includes('bearish') ? 'text-terminal-red' : 'text-terminal-muted'
+                            }`}>
+                              {t.htf_dir?.includes('bullish') ? '▲' : t.htf_dir?.includes('bearish') ? '▼' : '—'}
                             </span>
                           </td>
                           <td className="px-3 py-1.5"><GradeBadge grade={t.grade} /></td>
