@@ -374,17 +374,18 @@ def identify_draw_on_liquidity(session_levels: dict, equal_hl: dict, current_pri
     return {"target": None, "direction": "neutral", "reason": "No clear liquidity target identified"}
 
 
-def get_day_quality() -> dict:
+def get_day_quality(reference_dt=None) -> dict:
     """Day-of-week quality factor for ICT setups."""
-    wday = datetime.now(NY_TZ).weekday()
+    now = reference_dt.astimezone(NY_TZ) if reference_dt else datetime.now(NY_TZ)
+    wday = now.weekday()
     data = {
         0: (0.80, "Monday",    "Chop risk — reduce size, A+ only"),
         1: (1.00, "Tuesday",   "Prime day — full size"),
         2: (1.00, "Wednesday", "Prime day — full size"),
         3: (0.90, "Thursday",  "Good day — normal trading"),
         4: (0.75, "Friday",    "Position closing — reduce size"),
-        5: (0.00, "Saturday",  "Weekend — no trading"),
-        6: (0.00, "Sunday",    "Weekend — no trading"),
+        5: (0.60, "Saturday",  "Weekend — futures only, reduced quality"),
+        6: (0.60, "Sunday",    "Weekend — futures open after 6 PM ET"),
     }
     factor, name, note = data.get(wday, (0.80, "Unknown", ""))
     return {"factor": factor, "day": name, "note": note, "wday": wday}
@@ -393,7 +394,8 @@ def get_day_quality() -> dict:
 def score_setup(in_killzone, has_ifvg, in_discount_for_long, draw_aligned,
                 has_order_block, vwap_aligned,
                 htf_aligned: bool = True,
-                displacement_confirmed: bool = False) -> dict:
+                displacement_confirmed: bool = False,
+                reference_dt=None) -> dict:
     items = [
         ("NY Killzone active",          in_killzone,            20),
         ("HTF trend aligned",           htf_aligned,            15),
@@ -405,7 +407,7 @@ def score_setup(in_killzone, has_ifvg, in_discount_for_long, draw_aligned,
         ("VWAP aligned",                vwap_aligned,            5),
     ]
     raw = sum(pts for _, met, pts in items if met)
-    dq  = get_day_quality()
+    dq  = get_day_quality(reference_dt)
     score = round(raw * dq["factor"])
     checklist = [{"item": name, "met": met, "pts": pts} for name, met, pts in items]
     grade = "A+" if score >= 75 else "A" if score >= 55 else "B" if score >= 35 else "C"
@@ -526,13 +528,15 @@ def get_ict_analysis(bars: list, vwap: Optional[float] = None, current_price: Op
                               any(f["base_type"]=="bullish_fvg" for f in ifvgs),
                               in_disc, draw.get("direction")=="up",
                               any(o["type"]=="bullish_ob" for o in obs), vwap_bull,
-                              htf_aligned=True, displacement_confirmed=long_disp)
+                              htf_aligned=True, displacement_confirmed=long_disp,
+                              reference_dt=reference_dt)
     short_setup = score_setup(session["in_killzone"],
                               any(f["base_type"]=="bearish_fvg" for f in ifvgs),
                               not in_disc, draw.get("direction")=="down",
                               any(o["type"]=="bearish_ob" for o in obs), vwap_bear,
-                              htf_aligned=True, displacement_confirmed=short_disp)
-    day_q = get_day_quality()
+                              htf_aligned=True, displacement_confirmed=short_disp,
+                              reference_dt=reference_dt)
+    day_q = get_day_quality(reference_dt)
     return {
         "session": session, "session_levels": session_levels, "discount_premium": dp,
         "draw_on_liquidity": draw, "fair_value_gaps": fvgs, "ifvgs": ifvgs,
