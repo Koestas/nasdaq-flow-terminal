@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query
 from engines.ict import (get_ict_analysis, get_session_context,
                           detect_fvg, extract_session_levels,
                           calc_discount_premium, identify_draw_on_liquidity,
-                          detect_equal_highs_lows)
+                          detect_equal_highs_lows, get_htf_bias, get_day_quality)
 from engines.ict_signals import get_advanced_signals, calc_auto_trade_setup
 from engines.risk import calc_account_status
 from providers import yahoo, schwab as schwab_provider
@@ -41,7 +41,13 @@ async def ict_analysis(symbol: str = Query("QQQ")):
     bars = await _get_bars(symbol)
     vwap = yahoo.get_vwap(symbol)
     price = bars[-1]["close"] if bars and bars[-1].get("close") else None
-    return get_ict_analysis(bars, vwap=vwap, current_price=price)
+    daily_bars = yahoo.get_daily_bars(symbol)
+    htf = get_htf_bias(daily_bars)
+    day_q = get_day_quality()
+    result = get_ict_analysis(bars, vwap=vwap, current_price=price)
+    result["htf_bias"] = htf
+    result["day_quality"] = day_q
+    return result
 
 
 @router.get("/session")
@@ -99,6 +105,19 @@ async def advanced_analysis(symbol: str = Query("QQQ"), secondary: str = Query("
         "bias_direction": bias,
         "current_price": price,
         **advanced,
+    }
+
+
+@router.get("/htf-bias")
+async def htf_bias_endpoint(symbol: str = Query("QQQ")):
+    """Higher timeframe daily bias — trend direction, EMAs, structure."""
+    daily_bars = yahoo.get_daily_bars(symbol)
+    bias = get_htf_bias(daily_bars)
+    day_q = get_day_quality()
+    return {
+        "symbol": symbol,
+        "htf_bias": bias,
+        "day_quality": day_q,
     }
 
 

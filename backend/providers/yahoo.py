@@ -284,6 +284,29 @@ def get_futures_quotes() -> list:
     return results
 
 
+def get_daily_bars(ticker: str = "QQQ", period: str = "3mo") -> list:
+    """Fetch daily OHLCV bars for HTF analysis."""
+    try:
+        df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=True)
+        if df.empty:
+            return []
+        df = df.reset_index()
+        bars = []
+        for _, row in df.iterrows():
+            dt = row.get("Date") or row.get("Datetime")
+            bars.append({
+                "time": str(dt.date()) if hasattr(dt, "date") else str(dt),
+                "open":  _clean(float(row["Open"].iloc[0]  if hasattr(row["Open"],  "iloc") else row["Open"])),
+                "high":  _clean(float(row["High"].iloc[0]  if hasattr(row["High"],  "iloc") else row["High"])),
+                "low":   _clean(float(row["Low"].iloc[0]   if hasattr(row["Low"],   "iloc") else row["Low"])),
+                "close": _clean(float(row["Close"].iloc[0] if hasattr(row["Close"], "iloc") else row["Close"])),
+                "volume":_clean(float(row["Volume"].iloc[0]if hasattr(row["Volume"],"iloc") else row["Volume"])),
+            })
+        return bars
+    except Exception:
+        return []
+
+
 def get_chart_bars(symbol: str, interval: str = "5m", period: str = "1d") -> list:
     """Return OHLCV bars for charting. Handles multi-level column names from yfinance."""
     try:

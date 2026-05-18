@@ -6,6 +6,18 @@ import pytz
 NY_TZ = pytz.timezone("America/New_York")
 
 
+def _futures_open(now) -> bool:
+    """Futures trade Sun 6 PM – Fri 5 PM ET (with daily 5–6 PM maintenance break)."""
+    wday = now.weekday()  # 0=Mon … 6=Sun
+    m = now.hour * 60 + now.minute
+    if wday == 5:           # Saturday — always closed
+        return False
+    if wday == 6:           # Sunday — open only after 6 PM ET
+        return m >= 18 * 60
+    # Mon–Fri: open except 5–6 PM maintenance window
+    return not (17 * 60 <= m < 18 * 60)
+
+
 def is_ny_killzone() -> bool:
     now = datetime.now(NY_TZ)
     if now.weekday() >= 5:
@@ -19,8 +31,17 @@ def get_session_context() -> dict:
     m = now.hour * 60 + now.minute
     wday = now.weekday()
 
-    if wday >= 5:
-        session = "Weekend"
+    futures_live = _futures_open(now)
+
+    # Sunday after 6 PM — futures Asia session is live
+    if wday == 6 and m >= 18 * 60:
+        session = "Asia Session (Futures Open)"
+    elif wday == 5:
+        session = "Weekend — Futures Closed"
+    elif wday == 6:
+        session = "Weekend — Futures Closed"
+    elif 17 * 60 <= m < 18 * 60:
+        session = "Futures Maintenance (5–6 PM ET)"
     elif m < 9 * 60 + 30:
         if m < 4 * 60:
             session = "Asia Session"
@@ -46,6 +67,7 @@ def get_session_context() -> dict:
     return {
         "session": session,
         "in_killzone": is_ny_killzone(),
+        "futures_open": futures_live,
         "time_et": now.strftime("%I:%M %p ET"),
         "day": now.strftime("%A"),
         "session_note": _session_note(session),
@@ -60,11 +82,13 @@ def _session_note(session: str) -> str:
         "Midday / Lunch Chop": "Low-quality signals. Avoid or reduce size.",
         "Power Hour": "Trend resumes possible. Watch for PM setups.",
         "Final 15 Minutes": "Avoid new entries. Manage open positions only.",
+        "Futures Maintenance (5–6 PM ET)": "Daily CME maintenance window. No trading.",
         "Pre-Market / London Close": "Note pre-market H/L as key intraday levels.",
         "Asia Session": "Accumulation. Note Asia H/L for London/NY sweep targets.",
+        "Asia Session (Futures Open)": "Sunday open — futures live. Mark overnight levels. Watch for early Asia accumulation range.",
         "London Session": "London distributes — sweeps common. Look for reversal clues.",
-        "After Hours": "Market closed. Review session and journal.",
-        "Weekend": "Market closed.",
+        "After Hours": "Futures live. No equities. Note after-hours moves for tomorrow.",
+        "Weekend — Futures Closed": "Saturday — all markets closed.",
     }.get(session, "")
 
 
@@ -157,6 +181,24 @@ def extract_session_levels(bars: list, reference_dt=None) -> dict:
     return result
 
 
+def _is_displacement(bars: list, i: int) -> bool:
+    """True if bar i is a strong displacement candle (big body, above-avg size)."""
+    b = bars[i]
+    o, c, h, l = b.get("open"), b.get("close"), b.get("high"), b.get("low")
+    if None in (o, c, h, l):
+        return False
+    rng = h - l
+    if rng <= 0:
+        return False
+    body = abs(c - o)
+    body_ratio = body / rng
+    # Compare body to recent average
+    recent = [abs((bars[j].get("close", 0) or 0) - (bars[j].get("open", 0) or 0))
+              for j in range(max(0, i - 10), i)]
+    avg_body = sum(recent) / len(recent) if recent else 0
+    return body_ratio >= 0.55 and (avg_body == 0 or body >= avg_body * 1.2)
+
+
 def detect_fvg(bars: list) -> list:
     fvgs = []
     n = len(bars)
@@ -199,6 +241,7 @@ def detect_fvg(bars: list) -> list:
                         inverted = True; break
                 break
 
+        displacement = _is_displacement(bars, i)
         fvgs.append({
             "type": "ifvg" if inverted else fvg_type,
             "base_type": fvg_type,
@@ -209,7 +252,8 @@ def detect_fvg(bars: list) -> list:
             "time": curr.get("time"),
             "filled": filled,
             "inverted": inverted,
-            "strength": "strong" if size > 0.5 else "normal",
+            "displacement": displacement,
+            "strength": "strong" if size > 0.5 and displacement else ("normal" if size > 0.5 else "weak"),
             "description": _fvg_desc(fvg_type, top, bottom, inverted),
         })
     return fvgs[-20:]
@@ -330,19 +374,129 @@ def identify_draw_on_liquidity(session_levels: dict, equal_hl: dict, current_pri
     return {"target": None, "direction": "neutral", "reason": "No clear liquidity target identified"}
 
 
-def score_setup(in_killzone, has_ifvg, in_discount_for_long, draw_aligned, has_order_block, vwap_aligned) -> dict:
+def get_day_quality() -> dict:
+    """Day-of-week quality factor for ICT setups."""
+    wday = datetime.now(NY_TZ).weekday()
+    data = {
+        0: (0.80, "Monday",    "Chop risk — reduce size, A+ only"),
+        1: (1.00, "Tuesday",   "Prime day — full size"),
+        2: (1.00, "Wednesday", "Prime day — full size"),
+        3: (0.90, "Thursday",  "Good day — normal trading"),
+        4: (0.75, "Friday",    "Position closing — reduce size"),
+        5: (0.00, "Saturday",  "Weekend — no trading"),
+        6: (0.00, "Sunday",    "Weekend — no trading"),
+    }
+    factor, name, note = data.get(wday, (0.80, "Unknown", ""))
+    return {"factor": factor, "day": name, "note": note, "wday": wday}
+
+
+def score_setup(in_killzone, has_ifvg, in_discount_for_long, draw_aligned,
+                has_order_block, vwap_aligned,
+                htf_aligned: bool = True,
+                displacement_confirmed: bool = False) -> dict:
     items = [
-        ("NY Killzone active", in_killzone, 25),
-        ("iFVG present for entry", has_ifvg, 25),
-        ("Price in discount/premium zone", in_discount_for_long, 20),
-        ("Draw on liquidity aligned", draw_aligned, 20),
-        ("Order block confluence", has_order_block, 5),
-        ("VWAP aligned", vwap_aligned, 5),
+        ("NY Killzone active",          in_killzone,            20),
+        ("HTF trend aligned",           htf_aligned,            15),
+        ("iFVG present for entry",      has_ifvg,               15),
+        ("Displacement candle",         displacement_confirmed,  10),
+        ("Draw on liquidity aligned",   draw_aligned,           20),
+        ("Price in discount/premium",   in_discount_for_long,   10),
+        ("Order block confluence",      has_order_block,         5),
+        ("VWAP aligned",                vwap_aligned,            5),
     ]
-    score = sum(pts for _, met, pts in items if met)
-    checklist = [{"item": name, "met": met} for name, met, _ in items]
-    grade = "A+" if score >= 80 else "A" if score >= 60 else "B" if score >= 40 else "C"
-    return {"score": score, "grade": grade, "checklist": checklist}
+    raw = sum(pts for _, met, pts in items if met)
+    dq  = get_day_quality()
+    score = round(raw * dq["factor"])
+    checklist = [{"item": name, "met": met, "pts": pts} for name, met, pts in items]
+    grade = "A+" if score >= 75 else "A" if score >= 55 else "B" if score >= 35 else "C"
+    return {
+        "score": score, "raw_score": raw, "grade": grade,
+        "checklist": checklist, "day_quality": dq,
+    }
+
+
+def get_htf_bias(daily_bars: list) -> dict:
+    """Analyze daily bars for higher timeframe trend bias using structure + EMA."""
+    if len(daily_bars) < 22:
+        return {"bias": "neutral", "note": "Insufficient daily data for HTF analysis"}
+
+    closes = [b["close"] for b in daily_bars if b.get("close")]
+    highs  = [b["high"]  for b in daily_bars if b.get("high")]
+    lows   = [b["low"]   for b in daily_bars if b.get("low")]
+
+    if len(closes) < 22:
+        return {"bias": "neutral", "note": "Insufficient close data"}
+
+    # Simple EMA
+    def ema(data, period):
+        k = 2 / (period + 1)
+        e = data[0]
+        result = [e]
+        for v in data[1:]:
+            e = v * k + e * (1 - k)
+            result.append(e)
+        return result
+
+    ema20 = ema(closes, 20)
+    ema50 = ema(closes, min(50, len(closes)))
+
+    current = closes[-1]
+    above_ema20 = current > ema20[-1]
+    above_ema50 = current > ema50[-1]
+
+    # Structure: compare last 20 days to prior 20 days
+    n = min(20, len(highs) // 2)
+    recent_high = max(highs[-n:])
+    recent_low  = min(lows[-n:])
+    prev_high   = max(highs[-2*n:-n])
+    prev_low    = min(lows[-2*n:-n])
+
+    hh = recent_high > prev_high
+    hl = recent_low  > prev_low
+    lh = recent_high < prev_high
+    ll = recent_low  < prev_low
+
+    if hh and hl:
+        structure, bias = "HH / HL", "bullish"
+    elif lh and ll:
+        structure, bias = "LH / LL", "bearish"
+    elif hh or hl:
+        structure, bias = "Bullish Lean", "bullish_lean"
+    elif lh or ll:
+        structure, bias = "Bearish Lean", "bearish_lean"
+    else:
+        structure, bias = "Ranging", "neutral"
+
+    if above_ema20 and above_ema50 and bias in ("bullish", "bullish_lean"):
+        strength = "strong_bullish"
+    elif not above_ema20 and not above_ema50 and bias in ("bearish", "bearish_lean"):
+        strength = "strong_bearish"
+    elif above_ema20 and bias == "bullish":
+        strength = "bullish"
+    elif not above_ema20 and bias == "bearish":
+        strength = "bearish"
+    else:
+        strength = "mixed"
+
+    note = (
+        f"Daily: {structure}. Price {'above' if above_ema20 else 'below'} 20 EMA "
+        f"({ema20[-1]:.2f}), {'above' if above_ema50 else 'below'} 50 EMA ({ema50[-1]:.2f}). "
+        f"{'Only take LONGS on intraday.' if bias in ('bullish','bullish_lean') else 'Only take SHORTS on intraday.' if bias in ('bearish','bearish_lean') else 'Mixed — reduce size.'}"
+    )
+
+    return {
+        "bias": bias,
+        "strength": strength,
+        "structure": structure,
+        "above_ema20": bool(above_ema20),
+        "above_ema50": bool(above_ema50),
+        "ema20": round(ema20[-1], 2),
+        "ema50": round(ema50[-1], 2),
+        "current_close": round(current, 2),
+        "recent_high": round(recent_high, 2),
+        "recent_low":  round(recent_low, 2),
+        "note": note,
+    }
 
 
 def get_ict_analysis(bars: list, vwap: Optional[float] = None, current_price: Optional[float] = None, reference_dt=None) -> dict:
@@ -366,17 +520,25 @@ def get_ict_analysis(bars: list, vwap: Optional[float] = None, current_price: Op
     in_disc = dp.get("zone") == "discount"
     vwap_bull = vwap is not None and price is not None and price > vwap
     vwap_bear = vwap is not None and price is not None and price < vwap
-    long_setup = score_setup(session["in_killzone"], any(f["base_type"]=="bullish_fvg" for f in ifvgs),
-                             in_disc, draw.get("direction")=="up",
-                             any(o["type"]=="bullish_ob" for o in obs), vwap_bull)
-    short_setup = score_setup(session["in_killzone"], any(f["base_type"]=="bearish_fvg" for f in ifvgs),
+    long_disp  = any(f.get("displacement") and f["base_type"] == "bullish_fvg" for f in ifvgs)
+    short_disp = any(f.get("displacement") and f["base_type"] == "bearish_fvg" for f in ifvgs)
+    long_setup  = score_setup(session["in_killzone"],
+                              any(f["base_type"]=="bullish_fvg" for f in ifvgs),
+                              in_disc, draw.get("direction")=="up",
+                              any(o["type"]=="bullish_ob" for o in obs), vwap_bull,
+                              htf_aligned=True, displacement_confirmed=long_disp)
+    short_setup = score_setup(session["in_killzone"],
+                              any(f["base_type"]=="bearish_fvg" for f in ifvgs),
                               not in_disc, draw.get("direction")=="down",
-                              any(o["type"]=="bearish_ob" for o in obs), vwap_bear)
+                              any(o["type"]=="bearish_ob" for o in obs), vwap_bear,
+                              htf_aligned=True, displacement_confirmed=short_disp)
+    day_q = get_day_quality()
     return {
         "session": session, "session_levels": session_levels, "discount_premium": dp,
         "draw_on_liquidity": draw, "fair_value_gaps": fvgs, "ifvgs": ifvgs,
         "order_blocks": obs, "equal_highs_lows": equal_hl,
         "long_setup": long_setup, "short_setup": short_setup,
+        "day_quality": day_q,
         "summary": {"total_fvgs": len(fvgs), "unfilled_bullish_fvgs": len(bullish_fvgs),
                     "unfilled_bearish_fvgs": len(bearish_fvgs), "ifvg_count": len(ifvgs), "total_obs": len(obs)},
     }

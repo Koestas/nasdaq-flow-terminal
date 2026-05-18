@@ -4,6 +4,7 @@ from engines.bias import BiasEngine
 from engines.stats import calc_wave, calc_gex, calc_top_flow, calc_unusual
 from engines.ict import get_session_context, extract_session_levels
 from providers.yahoo import get_options_chain
+from providers.calendar import get_today_events
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 bias_engine = BiasEngine()
@@ -226,3 +227,9 @@ async def market_chart(
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@router.get("/calendar")
+async def economic_calendar():
+    """Today's high-impact USD economic events."""
+    return get_today_events()

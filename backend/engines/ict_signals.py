@@ -6,6 +6,23 @@ import pytz
 NY_TZ = pytz.timezone("America/New_York")
 
 
+def _minutes_ago(time_str: Optional[str]) -> Optional[float]:
+    """Return how many minutes ago this bar timestamp is, or None if unparseable."""
+    if not time_str:
+        return None
+    try:
+        from datetime import timezone
+        s = time_str
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 60
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Swing point detection
 # ---------------------------------------------------------------------------
@@ -181,6 +198,8 @@ def detect_liquidity_sweeps(bars: list, session_levels: dict, equal_hl: Optional
                     "wick_low": round(low, 2),
                     "close": round(close, 2),
                     "time": b.get("time"),
+                    "minutes_ago": round(_minutes_ago(b.get("time")) or 0),
+                    "is_fresh": (_minutes_ago(b.get("time")) or 999) <= 90,
                     "description": (
                         f"Bullish sweep of {label} ({lv:.2f}) — wick below, closed above. "
                         f"Stop-hunt complete. Look for bullish iFVG entry targeting higher draws."
@@ -197,6 +216,8 @@ def detect_liquidity_sweeps(bars: list, session_levels: dict, equal_hl: Optional
                     "wick_high": round(high, 2),
                     "close": round(close, 2),
                     "time": b.get("time"),
+                    "minutes_ago": round(_minutes_ago(b.get("time")) or 0),
+                    "is_fresh": (_minutes_ago(b.get("time")) or 999) <= 90,
                     "description": (
                         f"Bearish sweep of {label} ({lv:.2f}) — wick above, closed below. "
                         f"Stop-hunt complete. Look for bearish iFVG entry targeting lower draws."
@@ -639,7 +660,8 @@ def calc_auto_trade_setup(
 
     # ---- Direction ----
     sweeps = advanced_signals.get("liquidity_sweeps", [])
-    recent_sweep = sweeps[-1] if sweeps else None
+    fresh_sweeps = [s for s in sweeps if s.get("is_fresh", True)]
+    recent_sweep = fresh_sweeps[-1] if fresh_sweeps else (sweeps[-1] if sweeps else None)
     direction = recent_sweep.get("direction", bias_direction) if recent_sweep else bias_direction
 
     if direction == "neutral":

@@ -130,9 +130,108 @@ function FVGRow({ fvg }) {
         isInverted ? (isBull ? 'text-terminal-green' : 'text-terminal-red') : 'text-terminal-muted')}>
         {isInverted ? 'iFVG' : isBull ? 'FVG↑' : 'FVG↓'}
       </span>
+      {fvg.displacement && <span title="Displacement candle">⚡</span>}
       <span className="font-mono text-terminal-text">{fmt.price(fvg.bottom)} – {fmt.price(fvg.top)}</span>
       <span className="text-terminal-muted ml-auto shrink-0">Δ{fvg.size?.toFixed(2)}</span>
       {fvg.filled && <span className="text-terminal-muted shrink-0">[filled]</span>}
+    </div>
+  )
+}
+
+function HTFBiasPanel({ htf, dayQ }) {
+  if (!htf || !htf.bias) return null
+  const bias = htf.bias
+  const isBull = bias === 'bullish' || bias === 'bullish_lean'
+  const isBear = bias === 'bearish' || bias === 'bearish_lean'
+  const isStrong = htf.strength === 'strong_bullish' || htf.strength === 'strong_bearish'
+  const color = isBull
+    ? 'border-terminal-green/50 bg-terminal-green/10'
+    : isBear
+    ? 'border-terminal-red/50 bg-terminal-red/10'
+    : 'border-terminal-border bg-terminal-card'
+  const textColor = isBull ? 'text-terminal-green' : isBear ? 'text-terminal-red' : 'text-terminal-muted'
+  const biasLabel = {
+    bullish: 'BULLISH', bullish_lean: 'BULLISH LEAN',
+    bearish: 'BEARISH', bearish_lean: 'BEARISH LEAN', neutral: 'NEUTRAL',
+  }[bias] || bias.toUpperCase()
+
+  const dayFactor = dayQ?.factor ?? 1
+  const dayColor = dayFactor >= 1.0 ? 'text-terminal-green' : dayFactor >= 0.85 ? 'text-terminal-yellow' : 'text-terminal-red'
+
+  return (
+    <div className={clsx('rounded border px-4 py-3 space-y-2', color)}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          {isBull ? <TrendingUp size={16} className="text-terminal-green"/> : isBear ? <TrendingDown size={16} className="text-terminal-red"/> : <Minus size={16} className="text-terminal-muted"/>}
+          <div>
+            <div className={clsx('font-bold text-sm', textColor)}>
+              HTF Daily: {biasLabel} {isStrong && <span className="text-xs font-normal opacity-80">— STRONG</span>}
+            </div>
+            <div className="text-xs text-terminal-muted">{htf.structure}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          <div className="text-terminal-muted">
+            EMA20: <span className={htf.above_ema20 ? 'text-terminal-green font-mono' : 'text-terminal-red font-mono'}>{htf.ema20}</span>
+            {' '}
+            EMA50: <span className={htf.above_ema50 ? 'text-terminal-green font-mono' : 'text-terminal-red font-mono'}>{htf.ema50}</span>
+          </div>
+          {dayQ && (
+            <div className={clsx('px-2 py-0.5 rounded border text-xs font-semibold', dayColor,
+              dayFactor >= 1.0 ? 'border-terminal-green/40 bg-terminal-green/10' :
+              dayFactor >= 0.85 ? 'border-terminal-yellow/40 bg-terminal-yellow/10' :
+              'border-terminal-red/40 bg-terminal-red/10')}>
+              {dayQ.day} ×{dayFactor}
+            </div>
+          )}
+        </div>
+      </div>
+      {htf.note && <p className="text-xs text-terminal-muted leading-relaxed">{htf.note}</p>}
+    </div>
+  )
+}
+
+function CalendarWarning({ calData }) {
+  if (!calData) return null
+  const hasToday = calData.has_high_impact_today
+  const hasTomorrow = calData.has_high_impact_tomorrow
+  if (!hasToday && !hasTomorrow) return null
+  return (
+    <div className="space-y-1">
+      {hasToday && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded border border-terminal-red/60 bg-terminal-red/10 text-xs">
+          <AlertTriangle size={13} className="text-terminal-red shrink-0 mt-0.5"/>
+          <div>
+            <span className="font-bold text-terminal-red">HIGH IMPACT TODAY: </span>
+            <span className="text-terminal-text">{calData.today?.map(e => e.title).join(' · ')}</span>
+          </div>
+        </div>
+      )}
+      {hasTomorrow && !hasToday && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded border border-terminal-yellow/40 bg-terminal-yellow/5 text-xs">
+          <AlertTriangle size={13} className="text-terminal-yellow shrink-0 mt-0.5"/>
+          <div>
+            <span className="font-bold text-terminal-yellow">HIGH IMPACT TOMORROW: </span>
+            <span className="text-terminal-muted">{calData.tomorrow?.map(e => e.title).join(' · ')}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DayQualityBadge({ dayQ }) {
+  if (!dayQ) return null
+  const factor = dayQ.factor ?? 1
+  const color = factor >= 1.0
+    ? 'border-terminal-green/40 bg-terminal-green/10 text-terminal-green'
+    : factor >= 0.85
+    ? 'border-terminal-yellow/40 bg-terminal-yellow/10 text-terminal-yellow'
+    : 'border-terminal-red/40 bg-terminal-red/10 text-terminal-red'
+  return (
+    <div className={clsx('flex items-center gap-1.5 px-2 py-1 rounded border text-xs font-semibold', color)}
+         title={dayQ.note}>
+      {dayQ.day} <span className="opacity-70">×{factor}</span>
     </div>
   )
 }
@@ -186,6 +285,7 @@ function SweepAlert({ sweeps }) {
     <div className="space-y-1.5">
       {sweeps.slice(-5).reverse().map((s, i) => {
         const isBull = s.direction === 'bullish'
+        const isFresh = s.is_fresh !== false
         return (
           <div key={i} className={clsx(
             'px-3 py-2 rounded border text-xs',
@@ -196,6 +296,12 @@ function SweepAlert({ sweeps }) {
                       : <ArrowDownCircle size={12} className="text-terminal-red shrink-0"/>}
               <span className={clsx('font-semibold', isBull ? 'text-terminal-green' : 'text-terminal-red')}>
                 {s.label}
+              </span>
+              <span className={clsx('text-[10px] px-1 py-0.5 rounded font-semibold shrink-0',
+                isFresh
+                  ? 'bg-terminal-green/20 text-terminal-green border border-terminal-green/30'
+                  : 'bg-terminal-muted/10 text-terminal-muted border border-terminal-border/30')}>
+                {isFresh ? 'FRESH' : `STALE ${s.minutes_ago}m`}
               </span>
               <span className="font-mono text-terminal-muted ml-auto">{fmt.price(s.level)}</span>
             </div>
@@ -896,6 +1002,13 @@ export default function ICT() {
     staleTime: 30_000,
   })
 
+  const { data: calData } = useQuery({
+    queryKey: ['econ-calendar'],
+    queryFn: () => apiFetch('/api/market/calendar'),
+    refetchInterval: 300_000,
+    staleTime: 240_000,
+  })
+
   const session = data?.session
   const levels = data?.session_levels || {}
   const dp = data?.discount_premium || {}
@@ -906,6 +1019,8 @@ export default function ICT() {
   const ehl = data?.equal_highs_lows || { equal_highs: [], equal_lows: [] }
   const summary = data?.summary || {}
   const sortedFvgs = [...fvgs].sort((a, b) => (b.inverted ? 1 : 0) - (a.inverted ? 1 : 0))
+  const htf = data?.htf_bias || {}
+  const dayQ = data?.day_quality || {}
 
   const po3 = adv?.po3_phase
   const sweeps = adv?.liquidity_sweeps || []
@@ -919,6 +1034,9 @@ export default function ICT() {
 
   return (
     <div className="space-y-4">
+      {/* Calendar Warning — very top */}
+      <CalendarWarning calData={calData}/>
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3">
@@ -962,6 +1080,7 @@ export default function ICT() {
       {!isLoading && session && (
         <div className="flex items-start gap-3 flex-wrap">
           <SessionBadge session={session.session} inKillzone={session.in_killzone} timeEt={session.time_et}/>
+          <DayQualityBadge dayQ={dayQ}/>
           {dp.zone && <ZonePill zone={dp.zone} pct={dp.position_pct}/>}
           {advBonus > 0 && (
             <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold bg-terminal-purple/20 text-terminal-purple border border-terminal-purple/30">
@@ -979,6 +1098,11 @@ export default function ICT() {
           description={po3.description}
           minutesSinceOpen={po3.minutes_since_open}
         />
+      )}
+
+      {/* ── HTF BIAS — daily context above confluence ── */}
+      {!isLoading && htf.bias && (
+        <HTFBiasPanel htf={htf} dayQ={dayQ}/>
       )}
 
       {/* ── CONFLUENCE DECISION — the play ── */}
