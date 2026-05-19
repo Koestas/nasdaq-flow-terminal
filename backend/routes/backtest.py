@@ -96,6 +96,50 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
     return {"result": "expired", "exit_price": last}
 
 
+# ── 30-min VWAP bias (Coach Dakota filter) ───────────────────────────────────
+
+def _get_30min_vwap_bias(day_bars: list, bar_dt) -> str:
+    """
+    At bar_dt, check whether the most recently CLOSED 30-minute candle's close
+    is above or below the day's cumulative VWAP up to that point.
+    Returns 'bullish', 'bearish', or 'neutral' (neutral = no completed 30-min yet).
+    """
+    bar_mins = bar_dt.hour * 60 + bar_dt.minute
+
+    # Day VWAP up to (not including) current bar
+    cum_tpv = cum_vol = 0.0
+    for b in day_bars:
+        bdt = _bar_dt(b)
+        if bdt >= bar_dt:
+            break
+        h, l, c, v = b["high"], b["low"], b["close"], b.get("volume") or 0
+        cum_tpv += (h + l + c) / 3 * v
+        cum_vol += v
+
+    if cum_vol == 0:
+        return "neutral"
+    vwap = cum_tpv / cum_vol
+
+    # Most recently completed 30-min window boundaries
+    current_period_start = (bar_mins // 30) * 30
+    last_period_start    = current_period_start - 30
+    last_period_end      = current_period_start
+
+    period_bars = [
+        b for b in day_bars
+        if last_period_start
+           <= _bar_dt(b).hour * 60 + _bar_dt(b).minute
+           <  last_period_end
+    ]
+    if not period_bars:
+        return "neutral"   # no completed 30-min candle yet (first 30 min of session)
+
+    period_close = period_bars[-1]["close"]
+    if period_close > vwap:   return "bullish"
+    if period_close < vwap:   return "bearish"
+    return "neutral"
+
+
 # ── Per-day signal detection ──────────────────────────────────────────────────
 
 def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ",
@@ -138,6 +182,11 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         if htf_direction in ("bullish", "strong_bullish", "bullish_lean") and bias == "bearish":
             continue
         if htf_direction in ("bearish", "strong_bearish", "bearish_lean") and bias == "bullish":
+            continue
+
+        # 30-min VWAP filter (Coach Dakota): last closed 30-min candle must agree with bias
+        vwap_bias = _get_30min_vwap_bias(day_bars, bar_dt)
+        if vwap_bias != "neutral" and vwap_bias != bias:
             continue
 
         adv = get_advanced_signals(

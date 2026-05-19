@@ -174,6 +174,65 @@ async def trade_setup(
     }
 
 
+@router.get("/alert-check")
+async def alert_check():
+    """Fast killzone alert check — returns whether a valid ICT setup exists right now."""
+    import datetime as _dt
+    import pytz as _pytz
+    _ny = _pytz.timezone("America/New_York")
+    now_et = _dt.datetime.now(_ny)
+    day    = now_et.weekday()   # 0=Mon … 6=Sun
+    mins   = now_et.hour * 60 + now_et.minute
+    in_kz  = day < 5 and 9 * 60 + 30 <= mins <= 11 * 60 + 30
+
+    if not in_kz:
+        return {"alert": False, "in_killzone": False}
+
+    bars = await _get_bars("QQQ")
+    if not bars:
+        return {"alert": False, "in_killzone": True, "reason": "no data"}
+
+    session_levels = extract_session_levels(bars)
+    equal_hl       = detect_equal_highs_lows(bars)
+    price          = session_levels.get("current_price")
+
+    basic    = get_ict_analysis(bars, current_price=price)
+    long_sc  = basic.get("long_setup",  {}).get("score", 0)
+    short_sc = basic.get("short_setup", {}).get("score", 0)
+    bias     = "bullish" if long_sc > short_sc else "bearish" if short_sc > long_sc else "neutral"
+
+    if bias == "neutral":
+        return {"alert": False, "in_killzone": True, "reason": "neutral bias"}
+
+    setup = basic.get("long_setup" if bias == "bullish" else "short_setup", {})
+    grade = setup.get("grade", "")
+    if grade not in ("A+", "A"):
+        return {"alert": False, "in_killzone": True, "reason": f"grade {grade}"}
+
+    advanced     = get_advanced_signals(
+        bars=bars, session_levels=session_levels,
+        equal_hl=equal_hl, bars_secondary=[], bias_direction=bias,
+    )
+    sweeps       = advanced.get("liquidity_sweeps") or []
+    fresh_sweeps = [s for s in sweeps if s.get("is_fresh") and s.get("direction") == bias]
+    ifvgs        = basic.get("ifvgs") or []
+    aligned_ifvgs = [f for f in ifvgs if bias in (f.get("base_type") or "")]
+
+    alert = bool(fresh_sweeps and aligned_ifvgs)
+    top   = fresh_sweeps[-1] if fresh_sweeps else {}
+
+    return {
+        "alert":         alert,
+        "in_killzone":   True,
+        "direction":     bias,
+        "grade":         grade,
+        "score":         long_sc if bias == "bullish" else short_sc,
+        "sweep_count":   len(fresh_sweeps),
+        "ifvg_count":    len(aligned_ifvgs),
+        "sweep_summary": top.get("label", ""),
+    }
+
+
 @router.get("/confluence")
 async def ict_confluence(symbol: str = Query("NQ=F")):
     """

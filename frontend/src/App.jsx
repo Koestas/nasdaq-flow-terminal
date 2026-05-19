@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { useEffect } from 'react'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
 import NewsTicker from './components/NewsTicker'
@@ -21,10 +22,21 @@ import Risk from './pages/Risk'
 import Charts from './pages/Charts'
 import Learn from './pages/Learn'
 import Backtest from './pages/Backtest'
+import Checklist from './pages/Checklist'
+
+function KeepAlive() {
+  useEffect(() => {
+    const ping = () => fetch('/api/health').catch(() => {})
+    const id = setInterval(ping, 4 * 60 * 1000)  // every 4 min
+    return () => clearInterval(id)
+  }, [])
+  return null
+}
 
 export default function App() {
   return (
     <BrowserRouter>
+      <KeepAlive />
       <div className="min-h-screen bg-terminal-bg">
         <TopBar />
         <NewsTicker />
@@ -52,6 +64,7 @@ export default function App() {
                 <Route path="/charts" element={<Charts />} />
                 <Route path="/learn" element={<Learn />} />
                 <Route path="/backtest" element={<Backtest />} />
+                <Route path="/checklist" element={<Checklist />} />
                 <Route path="*" element={<Overview />} />
               </Routes>
             </ErrorBoundary>

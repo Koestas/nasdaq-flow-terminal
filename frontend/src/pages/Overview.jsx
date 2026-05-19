@@ -3,7 +3,7 @@ import { apiFetch, fmt } from '../lib/api'
 import BiasPanel from '../components/BiasPanel'
 import ErrorBoundary from '../components/ErrorBoundary'
 import { CardSkeleton, ChartSkeleton } from '../components/LoadingSkeleton'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { clsx } from 'clsx'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { useState } from 'react'
@@ -14,6 +14,84 @@ function StatCard({ label, value, sub, color = 'text-terminal-text' }) {
       <div className="stat-label">{label}</div>
       <div className={`stat-value mt-1 ${color}`}>{value}</div>
       {sub && <div className="text-xs text-terminal-muted mt-1">{sub}</div>}
+    </div>
+  )
+}
+
+const DAILY_LIMIT = 1000
+
+function DailyPnLCard() {
+  const today = new Date().toISOString().slice(0, 10)
+  const [pnl, setPnl] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('daily_pnl') || '{}')
+      return s.date === today ? (s.pnl ?? 0) : 0
+    } catch { return 0 }
+  })
+  const [input, setInput] = useState('')
+
+  const save = (v) => {
+    const rounded = Math.round(v * 100) / 100
+    localStorage.setItem('daily_pnl', JSON.stringify({ date: today, pnl: rounded }))
+    setPnl(rounded)
+  }
+
+  const addTrade = (e) => {
+    e.preventDefault()
+    const val = parseFloat(input)
+    if (isNaN(val)) return
+    save(pnl + val)
+    setInput('')
+  }
+
+  const isLoss    = pnl < 0
+  const usedPct   = Math.min(Math.abs(pnl) / DAILY_LIMIT * 100, 100)
+  const barColor  = isLoss
+    ? (usedPct >= 75 ? 'bg-terminal-red' : usedPct >= 50 ? 'bg-terminal-yellow' : 'bg-terminal-yellow/60')
+    : 'bg-terminal-green'
+  const pnlColor  = isLoss
+    ? (usedPct >= 75 ? 'text-terminal-red' : 'text-terminal-yellow')
+    : 'text-terminal-green'
+  const dateStr   = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York' })
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-2">
+        <span className="stat-label">TODAY'S P&amp;L</span>
+        <span className="text-[10px] text-terminal-muted">{dateStr}</span>
+      </div>
+      <div className={`font-mono font-bold text-2xl ${pnlColor} mb-1`}>
+        {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </div>
+      {/* Loss limit bar */}
+      <div className="relative h-1.5 bg-terminal-border rounded-full overflow-hidden mb-1.5">
+        <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${usedPct}%` }} />
+      </div>
+      <div className="text-[10px] text-terminal-muted mb-2.5">
+        {isLoss
+          ? `${usedPct.toFixed(0)}% of $${DAILY_LIMIT.toLocaleString()} daily loss limit`
+          : 'Green day — protect your profits'}
+      </div>
+      <form onSubmit={addTrade} className="flex gap-1">
+        <input
+          type="number"
+          step="0.01"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="+250 or -150"
+          className="flex-1 min-w-0 bg-terminal-bg border border-terminal-border rounded px-2 py-1 text-xs text-terminal-text placeholder:text-terminal-muted/50 focus:outline-none focus:border-terminal-blue"
+        />
+        <button type="submit"
+          className="px-2 py-1 rounded bg-terminal-blue/20 border border-terminal-blue/40 text-terminal-blue text-xs hover:bg-terminal-blue/30 transition-colors whitespace-nowrap">
+          + Add
+        </button>
+        {pnl !== 0 && (
+          <button type="button" onClick={() => save(0)}
+            className="px-2 py-1 rounded border border-terminal-border/60 text-terminal-muted text-xs hover:text-terminal-text transition-colors">
+            Reset
+          </button>
+        )}
+      </form>
     </div>
   )
 }
@@ -97,7 +175,10 @@ export default function Overview() {
       </ErrorBoundary>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <ErrorBoundary>
+          <DailyPnLCard />
+        </ErrorBoundary>
         <ErrorBoundary>
           {isLoading ? <CardSkeleton /> : (
             <StatCard

@@ -22,7 +22,7 @@ const PERIOD_LABELS = {
   '6mo': '6M', '1y': '1Y', '2y': '2Y',
 }
 
-const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true }
+const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true, or30: false }
 
 function toUnix(isoTime) {
   return Math.floor(new Date(isoTime).getTime() / 1000)
@@ -34,6 +34,7 @@ export default function Charts() {
   const [period, setPeriod]   = useState('1d')
   const [hovered, setHovered] = useState(null)
   const [overlays, setOverlays] = useState(DEFAULT_OVERLAYS)
+  const [volColor, setVolColor] = useState(false)
 
   const { symbol, ictSymbol } = SYMBOLS[symbolIndex]
 
@@ -130,15 +131,31 @@ export default function Charts() {
   useEffect(() => {
     if (!data || !candleRef.current) return
 
-    const bars = (data.bars || [])
+    const rawBars = (data.bars || [])
       .filter((b) => b.open != null && b.high != null && b.low != null && b.close != null)
-      .map((b) => ({ time: toUnix(b.time), open: b.open, high: b.high, low: b.low, close: b.close }))
-      .sort((a, b) => a.time - b.time)
+      .sort((a, b) => toUnix(a.time) - toUnix(b.time))
 
-    const vols = (data.bars || [])
-      .filter((b) => b.open != null && b.close != null)
-      .map((b) => ({ time: toUnix(b.time), value: b.volume || 0, color: b.close >= b.open ? '#10B981cc' : '#EF4444cc' }))
-      .sort((a, b) => a.time - b.time)
+    // Volume percentile thresholds for intensity coloring
+    const sortedVols = [...rawBars].map((b) => b.volume || 0).filter((v) => v > 0).sort((a, b) => a - b)
+    const p25 = sortedVols[Math.floor(sortedVols.length * 0.25)] || 0
+    const p75 = sortedVols[Math.floor(sortedVols.length * 0.75)] || 0
+
+    const bars = rawBars.map((b) => {
+      const isUp = b.close >= b.open
+      const t    = toUnix(b.time)
+      if (!volColor) return { time: t, open: b.open, high: b.high, low: b.low, close: b.close }
+
+      // Map volume to opacity suffix: high=ff, mid=aa, low=55
+      const vol = b.volume || 0
+      const alpha = vol >= p75 ? 'ff' : vol >= p25 ? 'aa' : '55'
+      const color = isUp ? `#10B981${alpha}` : `#EF4444${alpha}`
+      return { time: t, open: b.open, high: b.high, low: b.low, close: b.close, color, wickColor: color, borderColor: color }
+    })
+
+    const vols = rawBars.map((b) => ({
+      time: toUnix(b.time), value: b.volume || 0,
+      color: b.close >= b.open ? '#10B981cc' : '#EF4444cc',
+    }))
 
     try { candleRef.current.setData(bars) }   catch (e) { console.error(e) }
     try { volumeRef.current.setData(vols) }   catch (e) { console.error(e) }
@@ -149,7 +166,7 @@ export default function Charts() {
     try { vwapRef.current.setData(vwapBars) } catch (e) { console.error(e) }
 
     if (chartRef.current) chartRef.current.timeScale().fitContent()
-  }, [data])
+  }, [data, volColor])
 
   // ── Draw all price lines: session levels + ICT overlays ─────────────────
   useEffect(() => {
@@ -252,7 +269,31 @@ export default function Charts() {
       topH.forEach((e) => addLine(ictLinesRef.current, e.level, '#A78BFA', `EQH ×${e.count}`, LineStyle.Dotted, 2))
       topL.forEach((e) => addLine(ictLinesRef.current, e.level, '#A78BFA', `EQL ×${e.count}`, LineStyle.Dotted, 2))
     }
-  }, [data, ictData, overlays])
+
+    // 30-min Opening Range — first 30 minutes of NY session (9:30-10:00 ET)
+    if (overlays.or30 && data?.bars && isIntraday) {
+      // Group by ET date, take the most recent day
+      const byDay = {}
+      ;(data.bars || []).forEach((b) => {
+        const etDate = new Date(b.time).toLocaleDateString('en-US', { timeZone: 'America/New_York' })
+        ;(byDay[etDate] = byDay[etDate] || []).push(b)
+      })
+      const lastDay = Object.values(byDay).pop()
+      if (lastDay) {
+        const orBars = lastDay.filter((b) => {
+          const et   = new Date(new Date(b.time).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+          const mins = et.getHours() * 60 + et.getMinutes()
+          return mins >= 570 && mins < 600  // 9:30–10:00
+        })
+        if (orBars.length > 0) {
+          const orH = Math.max(...orBars.map((b) => b.high))
+          const orL = Math.min(...orBars.map((b) => b.low))
+          addLine(ictLinesRef.current, orH, '#9333EA', 'OR High', LineStyle.Dashed, 2)
+          addLine(ictLinesRef.current, orL, '#9333EA', 'OR Low',  LineStyle.Dashed, 2)
+        }
+      }
+    }
+  }, [data, ictData, overlays, isIntraday])
 
   const isUp = hovered ? hovered.close >= hovered.open : true
 
@@ -334,6 +375,7 @@ export default function Charts() {
             { key: 'ob',   label: 'OB',      activeColor: 'border-blue-500/50 text-blue-400 bg-blue-500/10' },
             { key: 'eql',  label: 'EQL/EQH', activeColor: 'border-purple-500/50 text-purple-400 bg-purple-500/10' },
             { key: 'dol',  label: 'DOL',     activeColor: 'border-cyan-500/50 text-cyan-400 bg-cyan-500/10' },
+            { key: 'or30', label: 'OR 30m',  activeColor: 'border-purple-400/50 text-purple-300 bg-purple-500/10' },
           ].map(({ key, label, activeColor }) => (
             <button
               key={key}
@@ -347,6 +389,18 @@ export default function Charts() {
               {overlays[key] ? '✓ ' : ''}{label}
             </button>
           ))}
+          <div className="w-px h-4 bg-terminal-border" />
+          <button
+            onClick={() => setVolColor((v) => !v)}
+            title="Volume-intensity candle coloring — brighter = more volume"
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+              volColor
+                ? 'border-emerald-500/50 text-emerald-300 bg-emerald-500/10'
+                : 'border-terminal-border text-terminal-muted bg-terminal-card'
+            }`}
+          >
+            {volColor ? '✓ ' : ''}Vol Color
+          </button>
           {ictData?.draw_on_liquidity?.direction && ictData.draw_on_liquidity.direction !== 'neutral' && (
             <span className="text-[10px] text-terminal-muted ml-2">
               DOL → {ictData.draw_on_liquidity.reason}
