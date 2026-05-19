@@ -222,6 +222,121 @@ def _check_or30_breakout(day_bars: list, bias: str, before_dt) -> bool:
     return False
 
 
+def _find_or30_setup(day_bars: list, all_prior_bars: list,
+                     instrument: str = "MNQ",
+                     htf_direction: str = "neutral",
+                     prior_days: dict | None = None,
+                     vol_regime_pct: float = 4.0) -> dict | None:
+    """
+    Coach Dakota / Coach Jay urgency trade: OR30 breakout with above-average volume.
+    Runs as a secondary track on days the ICT killzone setup doesn't fire.
+
+    Entry: close of the first bar that breaks the OR with vol > 1.2x OR average.
+    Stop: below OR low (longs) / above OR high (shorts) + instrument buffer.
+    Target: 1.5R fixed.
+    """
+    # Apply same day-level vol regime filter as ICT model
+    if prior_days:
+        threshold = vol_regime_pct / 100.0
+        prior_list = list(prior_days.values())
+        for prev_bars in prior_list[-3:]:
+            if prev_bars and prev_bars[0]["open"] > 0:
+                day_range_pct = (max(b["high"] for b in prev_bars) -
+                                 min(b["low"] for b in prev_bars)) / prev_bars[0]["open"]
+                if day_range_pct > threshold:
+                    return None  # post-crash regime — skip
+
+    # Build OR (9:30–10:00 bars = minutes 570–599)
+    or_bars = [b for b in day_bars
+               if 570 <= _bar_dt(b).hour * 60 + _bar_dt(b).minute < 600]
+    if len(or_bars) < 3:
+        return None
+    or_h   = max(b["high"]    for b in or_bars)
+    or_l   = min(b["low"]     for b in or_bars)
+    or_rng = or_h - or_l
+    if or_rng < 5:  # degenerate OR (gap or holiday) — skip
+        return None
+    avg_vol = sum(b.get("volume", 0) for b in or_bars) / len(or_bars) or 1
+
+    config  = _INSTRUMENT_CONFIG.get(instrument.upper(), _INSTRUMENT_CONFIG["MNQ"])
+    buf     = config["stop_buffer"]
+    min_st  = config["min_stop_pts"]
+
+    # Scan post-OR bars (10:00–11:30) for first clean breakout with volume
+    post_bars = [b for b in day_bars
+                 if 600 <= _bar_dt(b).hour * 60 + _bar_dt(b).minute <= 690]  # 10:00–11:30
+    for idx, b in enumerate(post_bars):
+        vol = b.get("volume", 0) or 0
+        if vol < avg_vol * 1.2:
+            continue  # volume confirmation required
+
+        if b["high"] > or_h:
+            bias = "bullish"
+            if htf_direction in ("bearish", "strong_bearish", "bearish_lean"):
+                continue
+            entry     = b["close"]
+            stop      = max(or_l - buf, entry - 2 * or_rng)
+            stop_dist = entry - stop
+            if stop_dist < min_st:
+                continue
+            target    = entry + 1.5 * stop_dist
+            remaining = post_bars[idx + 1:] + [
+                bb for bb in day_bars
+                if _bar_dt(bb).hour * 60 + _bar_dt(bb).minute > 690
+            ]
+            return {
+                "bar_index": idx,
+                "entry_bar": b,
+                "remaining_bars": remaining,
+                "direction": bias,
+                "entry": round(entry, 2),
+                "stop":  round(stop, 2),
+                "target": round(target, 2),
+                "stop_dist": round(stop_dist, 2),
+                "reward_dist": round(abs(target - entry), 2),
+                "rr_ratio": 1.5,
+                "grade": "B+",
+                "score": 55,
+                "sweep_label": "OR30-breakout",
+                "fvg_zone": f"{or_l:.2f}–{or_h:.2f}",
+                "dol_reason": "OR30 urgency trade",
+            }
+
+        if b["low"] < or_l:
+            bias = "bearish"
+            if htf_direction in ("bullish", "strong_bullish", "bullish_lean"):
+                continue
+            entry     = b["close"]
+            stop      = min(or_h + buf, entry + 2 * or_rng)
+            stop_dist = stop - entry
+            if stop_dist < min_st:
+                continue
+            target    = entry - 1.5 * stop_dist
+            remaining = post_bars[idx + 1:] + [
+                bb for bb in day_bars
+                if _bar_dt(bb).hour * 60 + _bar_dt(bb).minute > 690
+            ]
+            return {
+                "bar_index": idx,
+                "entry_bar": b,
+                "remaining_bars": remaining,
+                "direction": bias,
+                "entry": round(entry, 2),
+                "stop":  round(stop, 2),
+                "target": round(target, 2),
+                "stop_dist": round(stop_dist, 2),
+                "reward_dist": round(abs(target - entry), 2),
+                "rr_ratio": 1.5,
+                "grade": "B+",
+                "score": 55,
+                "sweep_label": "OR30-breakout",
+                "fvg_zone": f"{or_l:.2f}–{or_h:.2f}",
+                "dol_reason": "OR30 urgency trade",
+            }
+
+    return None
+
+
 def _day_range_ratio(day_bars: list, prior_days: dict) -> float:
     """
     Today's OR range vs 5-day average range.
@@ -345,7 +460,8 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
                          prior_days: dict | None = None,
                          min_score: int = 65,
                          sweep_max_age_mins: int = 90,
-                         require_mss: bool = True) -> dict | None:
+                         require_mss: bool = True,
+                         vol_regime_pct: float = 4.0) -> dict | None:
     """
     Walk through a killzone bar-by-bar; return the first A/A+ setup with sweep + iFVG.
     htf_direction: daily bias — filters out contra-trend setups.
@@ -436,15 +552,16 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
                 continue  # today is >2.2× normal range = chaotic/fake setups
 
             # 3-day volatility regime filter: if ANY of the last 3 trading days had an
-            # intraday range > 4% of open, market is in post-event carry-over mode.
-            # (4% on NQ@17k = 680pts; normal range is ~200pts)
+            # intraday range > vol_regime_pct, market is in post-event carry-over mode.
+            # Default 4% for NQ (680pts on NQ@17k); Gold uses 2.5%; ES uses 3%
             prior_list = list(prior_days.values())
             skip_volatile = False
+            threshold = vol_regime_pct / 100.0
             for prev_bars in prior_list[-3:]:
                 if prev_bars and prev_bars[0]["open"] > 0:
                     day_range_pct = (max(b["high"] for b in prev_bars) -
                                      min(b["low"] for b in prev_bars)) / prev_bars[0]["open"]
-                    if day_range_pct > 0.04:  # >4% range = extreme carry-over volatility
+                    if day_range_pct > threshold:
                         skip_volatile = True
                         break
             if skip_volatile:
@@ -579,6 +696,9 @@ def run_backtest(
     lookback_days:     int = Query(default=30, ge=5, le=90),
     contracts:         int = Query(default=1, ge=1, le=20, description="Number of contracts per trade"),
     daily_loss_limit:  int = Query(default=1000, ge=100, le=5000, description="Daily loss limit in USD"),
+    min_score:         int = Query(default=0,  ge=0, le=100, description="Score floor override (0=auto per day)"),
+    require_mss:       int = Query(default=1,  ge=0, le=1,   description="1=require MSS confirmation, 0=skip MSS"),
+    vol_regime_pct:    float = Query(default=4.0, ge=1.0, le=10.0, description="3-day volatility regime threshold %"),
 ):
     config     = _INSTRUMENT_CONFIG.get(instrument.upper(), _INSTRUMENT_CONFIG["MNQ"])
     usd_per_pt = config["dollars_per_point"] * contracts
@@ -616,37 +736,48 @@ def run_backtest(
 
         # Determine day quality tier — affects score minimum for that session
         # Mon: choppier open dynamics → score 70
-        # Fri: pre-weekend, lower volume, narrower range → score 72 (only very clean setups)
+        # Fri: pre-weekend chop — require 68+ (was 72, too strict — never fired)
         # Tue–Thu: peak ICT session quality → score 65
+        # min_score param overrides (0 = use auto tier)
         is_monday = d.weekday() == 0
         is_friday = d.weekday() == 4
-        if is_monday:
+        if min_score > 0:
+            am_min_score = min_score
+        elif is_monday:
             am_min_score = 70
         elif is_friday:
-            am_min_score = 72
+            am_min_score = 68
         else:
             am_min_score = 65
         prior_map = {pd: by_day[pd] for pd in days_sorted[:i]}
 
         used_entries: list = []
         day_traded   = False
-        am_result    = None   # tracks AM outcome for PM gating
+        trades_today = 0
+        next_bar_idx = 6  # start first scan at bar 6 of killzone
 
-        # ── AM Killzone (9:30–11:30 ET) ───────────────────────────────────────
-        am_setup = _find_killzone_setup(
-            day_bars, prior_bars,
-            instrument=instrument.upper(),
-            start_bar_index=6,
-            htf_direction=htf_dir,
-            used_entries=used_entries,
-            kz_start=(9, 30), kz_end=(11, 30),
-            prior_days=prior_map,
-            min_score=am_min_score,
-            sweep_max_age_mins=90,
-            require_mss=True,
-        )
+        # ── AM Killzone (9:30–11:30 ET) — up to 2 trades/day ─────────────────
+        # First trade always required. Second trade (reload) only allowed when the
+        # first trade resolved as win or partial_win (not loss). This matches how
+        # prop traders reload after a confirmed profitable setup clears.
+        while trades_today < 2:
+            am_setup = _find_killzone_setup(
+                day_bars, prior_bars,
+                instrument=instrument.upper(),
+                start_bar_index=next_bar_idx,
+                htf_direction=htf_dir,
+                used_entries=used_entries,
+                kz_start=(9, 30), kz_end=(11, 30),
+                prior_days=prior_map,
+                min_score=am_min_score,
+                sweep_max_age_mins=90,
+                require_mss=bool(require_mss),
+                vol_regime_pct=vol_regime_pct,
+            )
 
-        if am_setup:
+            if not am_setup:
+                break
+
             outcome = _simulate_trade(
                 am_setup["entry"], am_setup["stop"], am_setup["target"],
                 am_setup["direction"], am_setup["remaining_bars"],
@@ -667,11 +798,14 @@ def run_backtest(
             pnl = round(pts * usd_per_pt, 2)
             running_pnl += pnl
             day_traded = True
+            trades_today += 1
             used_entries.append(am_setup["entry"])
+            next_bar_idx = am_setup["bar_index"] + 2  # resume scan 2 bars after last entry
 
+            session_label = "AM" if trades_today == 1 else "AM2"
             trades.append({
                 "date": d.isoformat(), "day": d.strftime("%a %b %d"),
-                "session": "AM", "direction": am_setup["direction"],
+                "session": session_label, "direction": am_setup["direction"],
                 "grade": am_setup["grade"], "score": am_setup["score"],
                 "htf_dir": htf_dir,
                 "entry": am_setup["entry"], "stop": am_setup["stop"],
@@ -685,8 +819,55 @@ def run_backtest(
             })
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
 
-        # No PM session — PM signals are low-volume and produce negative expectancy.
-        # Trade frequency comes from Monday/Friday allowance + natural AM setup density.
+            # Only reload after a win or partial_win; stop on loss
+            if am_result == "loss":
+                break
+
+        # OR30 urgency trade — secondary track on days the ICT model didn't fire.
+        # Coach Dakota setup: first bar to break the OR range with 1.2x OR average volume.
+        # Lower quality than ICT (B+ grade, 55 score) but adds trades on clean trending days.
+        if not day_traded and not is_monday and not is_friday:
+            or_setup = _find_or30_setup(
+                day_bars, prior_bars,
+                instrument=instrument.upper(),
+                htf_direction=htf_dir,
+                prior_days=prior_map,
+                vol_regime_pct=vol_regime_pct,
+            )
+            if or_setup:
+                or_outcome = _simulate_trade(
+                    or_setup["entry"], or_setup["stop"], or_setup["target"],
+                    or_setup["direction"], or_setup["remaining_bars"],
+                    stop_dist=or_setup["stop_dist"],
+                )
+                or_res = or_outcome["result"]
+                sd2    = or_setup["stop_dist"]
+                if or_res == "win":
+                    pts2 = (or_outcome["exit_price"] - or_setup["entry"]) if or_setup["direction"] == "bullish" \
+                           else (or_setup["entry"] - or_outcome["exit_price"])
+                elif or_res == "partial_win":
+                    pts2 = sd2 * 0.5
+                else:
+                    pts2 = (or_outcome["exit_price"] - or_setup["entry"]) if or_setup["direction"] == "bullish" \
+                           else (or_setup["entry"] - or_outcome["exit_price"])
+                pnl2 = round(pts2 * usd_per_pt, 2)
+                running_pnl += pnl2
+                day_traded = True
+                trades.append({
+                    "date": d.isoformat(), "day": d.strftime("%a %b %d"),
+                    "session": "OR30", "direction": or_setup["direction"],
+                    "grade": or_setup["grade"], "score": or_setup["score"],
+                    "htf_dir": htf_dir,
+                    "entry": or_setup["entry"], "stop": or_setup["stop"],
+                    "target": or_setup["target"], "exit_price": or_outcome["exit_price"],
+                    "result": or_res, "eod": or_outcome.get("eod", False),
+                    "pts": round(pts2, 2), "pnl": pnl2,
+                    "rr_achieved": round(pts2 / sd2, 2) if sd2 else 0,
+                    "rr_planned": or_setup["rr_ratio"], "stop_dist": sd2,
+                    "sweep": or_setup["sweep_label"], "fvg_zone": or_setup["fvg_zone"],
+                    "dol": or_setup["dol_reason"], "running_pnl": round(running_pnl, 2),
+                })
+                equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
 
         if not day_traded:
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})

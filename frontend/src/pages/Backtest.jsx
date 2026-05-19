@@ -84,8 +84,17 @@ function ResultBadge({ result, eod }) {
 function GradeBadge({ grade }) {
   const color = grade === 'A+' ? 'text-green-400 border-green-500/40 bg-green-500/10'
               : grade === 'A'  ? 'text-blue-400 border-blue-500/40 bg-blue-500/10'
+              : grade === 'B+' ? 'text-orange-400 border-orange-500/40 bg-orange-500/10'
               : 'text-terminal-muted border-terminal-border bg-terminal-card'
   return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${color}`}>{grade}</span>
+}
+
+function SessionBadge({ session }) {
+  if (session === 'OR30')
+    return <span className="text-[10px] font-bold text-orange-400 px-1.5 py-0.5 rounded bg-orange-500/10 border border-orange-500/30">OR30</span>
+  if (session === 'AM2')
+    return <span className="text-[10px] font-bold text-terminal-blue px-1.5 py-0.5 rounded bg-terminal-blue/10 border border-terminal-blue/30">AM2</span>
+  return <span className="text-[10px] font-bold text-terminal-muted px-1.5 py-0.5 rounded bg-terminal-card border border-terminal-border">AM</span>
 }
 
 export default function Backtest() {
@@ -168,7 +177,7 @@ export default function Backtest() {
       {/* Disclaimer */}
       <div className="flex items-start gap-2 px-3 py-2 bg-terminal-yellow/5 border border-terminal-yellow/20 rounded text-xs text-terminal-yellow/80">
         <AlertCircle size={12} className="shrink-0 mt-0.5" />
-        Simulated results using Yahoo Finance 5m data. Aligned with daily HTF bias, 1 trade/day (Mon+Fri skipped), partial TP at 1R + move stop to breakeven. Up to 90 days (chunked download). Past performance ≠ future results.
+        Simulated results using Yahoo Finance 5m data. <strong>Arlennys Model</strong>: HTF-aligned ICT sweep+iFVG, grade A/A+, 3-day vol regime filter, partial TP at 1R→breakeven (sessions: AM). <strong>OR30 track</strong>: Coach Dakota urgency trade, OR breakout with 1.2× volume (sessions: OR30). 1 trade/day max each track. Past performance ≠ future results.
       </div>
 
       {!data && !running && (
@@ -212,6 +221,29 @@ export default function Backtest() {
             <StatCard label="Avg R:R" value={`${stats.avg_rr ?? 0}R`} sub="actual achieved" />
             <StatCard label="Max DD" value={`$${stats.max_drawdown ?? 0}`} sub="peak-to-trough" color="text-terminal-red" />
           </div>
+
+          {/* Session breakdown */}
+          {(() => {
+            const ict  = trades.filter(t => t.session === 'AM' || t.session === 'AM2')
+            const or30 = trades.filter(t => t.session === 'OR30')
+            const ictWR  = ict.length  ? Math.round(ict.filter(t => t.result !== 'loss').length  / ict.length  * 100) : null
+            const or30WR = or30.length ? Math.round(or30.filter(t => t.result !== 'loss').length / or30.length * 100) : null
+            return (
+              <div className="flex gap-2 text-[10px] flex-wrap">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-terminal-card border border-terminal-border rounded">
+                  <span className="text-terminal-muted">Arlennys ICT:</span>
+                  <span className="font-bold text-terminal-text">{ict.length} trades</span>
+                  {ictWR !== null && <span className={ictWR >= 60 ? 'text-terminal-green' : 'text-terminal-red'}>{ictWR}% WR</span>}
+                </div>
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-terminal-card border border-orange-500/20 rounded">
+                  <span className="text-terminal-muted">OR30 Urgency:</span>
+                  <span className="font-bold text-terminal-text">{or30.length} trades</span>
+                  {or30WR !== null && <span className={or30WR >= 60 ? 'text-terminal-green' : 'text-terminal-red'}>{or30WR}% WR</span>}
+                  {or30.length === 0 && <span className="text-terminal-muted italic">(fires in normal market — blocked by same vol filter)</span>}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Equity curve */}
           {curve.length > 2 && <MiniEquityCurve curve={curve} />}
@@ -257,7 +289,7 @@ export default function Backtest() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-terminal-border bg-terminal-bg">
-                      {['Date', 'Dir', 'HTF', 'Grade', 'Entry', 'Stop', 'Target', 'Exit', 'Pts', 'P&L', 'RR', 'Result', 'Equity'].map(h => (
+                      {['Date', 'Sess', 'Dir', 'HTF', 'Grade', 'Entry', 'Stop', 'Target', 'Exit', 'Pts', 'P&L', 'RR', 'Result', 'Equity'].map(h => (
                         <th key={h} className="px-3 py-2 text-left text-terminal-muted font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -269,6 +301,7 @@ export default function Backtest() {
                       return (
                         <tr key={i} className={`border-b border-terminal-border/30 hover:bg-terminal-bg/50 ${rowColor}`}>
                           <td className="px-3 py-1.5 text-terminal-muted whitespace-nowrap">{t.day}</td>
+                          <td className="px-3 py-1.5"><SessionBadge session={t.session} /></td>
                           <td className="px-3 py-1.5">
                             <span className={t.direction === 'bullish' ? 'text-terminal-green font-bold' : 'text-terminal-red font-bold'}>
                               {t.direction === 'bullish' ? '▲ L' : '▼ S'}
