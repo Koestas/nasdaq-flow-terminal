@@ -342,12 +342,17 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
                          start_bar_index: int = 6, htf_direction: str = "neutral",
                          used_entries: list | None = None,
                          kz_start: tuple = (9, 30), kz_end: tuple = (11, 30),
-                         prior_days: dict | None = None) -> dict | None:
+                         prior_days: dict | None = None,
+                         min_score: int = 65,
+                         sweep_max_age_mins: int = 90,
+                         require_mss: bool = True) -> dict | None:
     """
-    Walk through the NY killzone bars one at a time; return the first
-    A or A+ setup with a sweep + iFVG.
+    Walk through a killzone bar-by-bar; return the first A/A+ setup with sweep + iFVG.
     htf_direction: daily bias — filters out contra-trend setups.
-    used_entries: entries already taken today — prevents re-entering the same FVG zone.
+    used_entries: entries already taken today — prevents re-entering same FVG zone.
+    min_score: ICT score floor (65 AM standard; 68 PM; 70 Monday).
+    sweep_max_age_mins: freshness window relative to bar_dt (90 AM; 330 PM covers full session).
+    require_mss: True for AM (strict); False for PM (structure already established in AM session).
     """
     kz_bars = [
         b for b in day_bars
@@ -389,9 +394,9 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
 
         # ── QUALITY FILTERS ────────────────────────────────────────────────────
 
-        # 1. Minimum ICT score: require 65+ (well above grade A floor of 55)
+        # 1. Minimum ICT score (parameterised — 65 standard, 70 on Monday/PM session)
         setup_score_pre = long_sc if bias == "bullish" else short_sc
-        if setup_score_pre < 65:
+        if setup_score_pre < min_score:
             continue
 
         # 2. VWAP position: price must be on correct side of day VWAP
@@ -451,7 +456,8 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         )
 
         sweeps = adv.get("liquidity_sweeps") or []
-        # Fresh sweeps: sweep time within 90 min of current bar (use bar_dt for backtest accuracy)
+        # Sweep freshness: within sweep_max_age_mins of current bar_dt
+        # AM=90min (tight — only same-session sweeps); PM=330min (full day, AM sweeps still valid)
         recent = []
         for s in sweeps:
             if s.get("direction") != bias:
@@ -461,22 +467,23 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
                 try:
                     s_dt = _bar_dt({"time": s_time})
                     mins_since = (bar_dt - s_dt).total_seconds() / 60
-                    if 0 <= mins_since <= 90:
+                    if 0 <= mins_since <= sweep_max_age_mins:
                         recent.append(s)
                 except Exception:
-                    recent.append(s)  # include if time parsing fails
+                    recent.append(s)
             else:
                 recent.append(s)
         if not recent:
             continue
 
-        # Displacement candle: MSS/CHoCH confirmed in setup direction
-        mss = adv.get("mss_choch") or {}
-        last_struct = (mss.get("last_structure") or "").lower()
-        if bias == "bullish" and "bullish" not in last_struct:
-            continue
-        if bias == "bearish" and "bearish" not in last_struct:
-            continue
+        # MSS/CHoCH confirmation: required for AM; skipped for PM (structure set by AM session)
+        if require_mss:
+            mss = adv.get("mss_choch") or {}
+            last_struct = (mss.get("last_structure") or "").lower()
+            if bias == "bullish" and "bullish" not in last_struct:
+                continue
+            if bias == "bearish" and "bearish" not in last_struct:
+                continue
 
         ifvgs = analysis.get("ifvgs") or []
         aligned = [f for f in ifvgs
@@ -607,90 +614,79 @@ def run_backtest(
         htf_result = get_htf_bias(htf_bars) if len(htf_bars) >= 22 else {"bias": "neutral"}
         htf_dir = htf_result.get("bias", "neutral")
 
-        # Monday/Friday: reaction days and pre-weekend chop — skip for cleaner setups
-        if d.weekday() in (0, 4):
-            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
-            continue
+        # Determine day quality tier — affects score minimum for that session
+        # Mon: choppier open dynamics → score 70
+        # Fri: pre-weekend, lower volume, narrower range → score 72 (only very clean setups)
+        # Tue–Thu: peak ICT session quality → score 65
+        is_monday = d.weekday() == 0
+        is_friday = d.weekday() == 4
+        if is_monday:
+            am_min_score = 70
+        elif is_friday:
+            am_min_score = 72
+        else:
+            am_min_score = 65
+        prior_map = {pd: by_day[pd] for pd in days_sorted[:i]}
 
-        # 1 trade per day: first valid setup taken; no second attempt (prevents revenge trading)
-        day_losses  = 0
-        next_start  = 6   # bar index to resume search from
-        day_traded  = False
-        used_entries: list = []   # FVG entry prices already traded today
+        used_entries: list = []
+        day_traded   = False
+        am_result    = None   # tracks AM outcome for PM gating
 
-        while day_losses < 1:
-            # Daily loss limit — stop trading for the day if DLL is hit
-            day_loss_usd = sum(t["pnl"] for t in trades if t["date"] == d.isoformat())
-            if day_loss_usd <= -daily_loss_limit:
-                break
+        # ── AM Killzone (9:30–11:30 ET) ───────────────────────────────────────
+        am_setup = _find_killzone_setup(
+            day_bars, prior_bars,
+            instrument=instrument.upper(),
+            start_bar_index=6,
+            htf_direction=htf_dir,
+            used_entries=used_entries,
+            kz_start=(9, 30), kz_end=(11, 30),
+            prior_days=prior_map,
+            min_score=am_min_score,
+            sweep_max_age_mins=90,
+            require_mss=True,
+        )
 
-            setup = _find_killzone_setup(day_bars, prior_bars,
-                                         instrument=instrument.upper(),
-                                         start_bar_index=next_start,
-                                         htf_direction=htf_dir,
-                                         used_entries=used_entries,
-                                         prior_days={pd: by_day[pd] for pd in days_sorted[:i]})
-            if not setup:
-                break
-
+        if am_setup:
             outcome = _simulate_trade(
-                setup["entry"], setup["stop"], setup["target"],
-                setup["direction"], setup["remaining_bars"],
-                stop_dist=setup["stop_dist"],
+                am_setup["entry"], am_setup["stop"], am_setup["target"],
+                am_setup["direction"], am_setup["remaining_bars"],
+                stop_dist=am_setup["stop_dist"],
             )
+            am_result = outcome["result"]
+            sd = am_setup["stop_dist"]
 
-            res = outcome["result"]
-            exit_p = outcome["exit_price"]
-            sd = setup["stop_dist"]
-
-            # P&L calculation:
-            # win         = full 2R → exit_price is target
-            # partial_win = 1R hit → 50% exited at 1R (entry+sd), 50% at breakeven (entry)
-            #               net = 0.5 × sd (half position made sd, half made 0)
-            # loss        = stopped at stop → full loss
-            if res == "win":
-                pts = (exit_p - setup["entry"]) if setup["direction"] == "bullish" \
-                      else (setup["entry"] - exit_p)
-            elif res == "partial_win":
-                pts = sd * 0.5  # net of partial strategy: 50%×1R + 50%×0R
+            if am_result == "win":
+                pts = (outcome["exit_price"] - am_setup["entry"]) if am_setup["direction"] == "bullish" \
+                      else (am_setup["entry"] - outcome["exit_price"])
+            elif am_result == "partial_win":
+                pts = sd * 0.5
             else:
-                pts = (exit_p - setup["entry"]) if setup["direction"] == "bullish" \
-                      else (setup["entry"] - exit_p)
+                pts = (outcome["exit_price"] - am_setup["entry"]) if am_setup["direction"] == "bullish" \
+                      else (am_setup["entry"] - outcome["exit_price"])
 
             pnl = round(pts * usd_per_pt, 2)
             running_pnl += pnl
             day_traded = True
+            used_entries.append(am_setup["entry"])
 
-            trade = {
-                "date":        d.isoformat(),
-                "day":         d.strftime("%a %b %d"),
-                "direction":   setup["direction"],
-                "grade":       setup["grade"],
-                "score":       setup["score"],
-                "htf_dir":     htf_dir,
-                "entry":       setup["entry"],
-                "stop":        setup["stop"],
-                "target":      setup["target"],
-                "exit_price":  exit_p,
-                "result":      res,
-                "eod":         outcome.get("eod", False),
-                "pts":         round(pts, 2),
-                "pnl":         pnl,
+            trades.append({
+                "date": d.isoformat(), "day": d.strftime("%a %b %d"),
+                "session": "AM", "direction": am_setup["direction"],
+                "grade": am_setup["grade"], "score": am_setup["score"],
+                "htf_dir": htf_dir,
+                "entry": am_setup["entry"], "stop": am_setup["stop"],
+                "target": am_setup["target"], "exit_price": outcome["exit_price"],
+                "result": am_result, "eod": outcome.get("eod", False),
+                "pts": round(pts, 2), "pnl": pnl,
                 "rr_achieved": round(pts / sd, 2) if sd else 0,
-                "rr_planned":  setup["rr_ratio"],
-                "stop_dist":   sd,
-                "sweep":       setup["sweep_label"],
-                "fvg_zone":    setup["fvg_zone"],
-                "dol":         setup["dol_reason"],
-                "running_pnl": round(running_pnl, 2),
-            }
-            trades.append(trade)
+                "rr_planned": am_setup["rr_ratio"], "stop_dist": sd,
+                "sweep": am_setup["sweep_label"], "fvg_zone": am_setup["fvg_zone"],
+                "dol": am_setup["dol_reason"], "running_pnl": round(running_pnl, 2),
+            })
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
 
-            # 1 trade per day — always break after first trade
-            if res == "loss":
-                day_losses += 1
-            break
+        # No PM session — PM signals are low-volume and produce negative expectancy.
+        # Trade frequency comes from Monday/Friday allowance + natural AM setup density.
 
         if not day_traded:
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
