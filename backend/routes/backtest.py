@@ -26,35 +26,67 @@ KZ_END   = (11, 30)
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
-def _download(symbol: str, start: datetime, end: datetime, interval: str) -> list:
-    try:
-        df = yf.download(symbol, start=start, end=end, interval=interval,
-                         progress=False, auto_adjust=True)
-        if df.empty:
-            return []
-        df = df.reset_index()
-        if hasattr(df.columns, "levels"):
-            df.columns = [c[0] if c[1] in ("", symbol) else c[0] for c in df.columns]
-        ts_col = "Datetime" if "Datetime" in df.columns else "Date"
-        bars = []
-        for _, row in df.iterrows():
-            ts = row[ts_col]
-            try:
-                o = float(row["Open"]); h = float(row["High"])
-                l = float(row["Low"]);  c = float(row["Close"])
-                v = float(row.get("Volume") or 0)
-            except Exception:
-                continue
-            if None in (o, h, l, c) or any(x != x for x in (o, h, l, c)):
-                continue
-            bars.append({
-                "time": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-                "open": round(o, 4), "high": round(h, 4),
-                "low":  round(l, 4), "close": round(c, 4), "volume": v or 0,
-            })
-        return bars
-    except Exception:
+def _parse_bars(df, symbol: str) -> list:
+    """Convert a yfinance DataFrame to bar dicts."""
+    if df.empty:
         return []
+    df = df.reset_index()
+    if hasattr(df.columns, "levels"):
+        df.columns = [c[0] if c[1] in ("", symbol) else c[0] for c in df.columns]
+    ts_col = "Datetime" if "Datetime" in df.columns else "Date"
+    bars = []
+    for _, row in df.iterrows():
+        ts = row[ts_col]
+        try:
+            o = float(row["Open"]); h = float(row["High"])
+            l = float(row["Low"]);  c = float(row["Close"])
+            v = float(row.get("Volume") or 0)
+        except Exception:
+            continue
+        if None in (o, h, l, c) or any(x != x for x in (o, h, l, c)):
+            continue
+        bars.append({
+            "time": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "open": round(o, 4), "high": round(h, 4),
+            "low":  round(l, 4), "close": round(c, 4), "volume": v or 0,
+        })
+    return bars
+
+
+def _download(symbol: str, start: datetime, end: datetime, interval: str) -> list:
+    """
+    Download bars. For 5m data yfinance caps at ~60 days per request; for longer
+    lookbacks we split into 50-day chunks so up to 180 days of 5m data is available.
+    """
+    if interval != "5m":
+        try:
+            df = yf.download(symbol, start=start, end=end, interval=interval,
+                             progress=False, auto_adjust=True)
+            return _parse_bars(df, symbol)
+        except Exception:
+            return []
+
+    # 5m: fetch in 50-day chunks (yfinance hard-limit is ~60 days)
+    all_bars: list = []
+    chunk_end = end
+    while chunk_end > start:
+        chunk_start = max(start, chunk_end - timedelta(days=50))
+        try:
+            df = yf.download(symbol, start=chunk_start, end=chunk_end,
+                             interval="5m", progress=False, auto_adjust=True)
+            chunk_bars = _parse_bars(df, symbol)
+            all_bars = chunk_bars + all_bars
+        except Exception:
+            pass
+        chunk_end = chunk_start
+    # Deduplicate by time
+    seen = set()
+    unique = []
+    for b in all_bars:
+        if b["time"] not in seen:
+            seen.add(b["time"])
+            unique.append(b)
+    return sorted(unique, key=lambda b: b["time"])
 
 
 def _bar_dt(b: dict) -> datetime:
@@ -91,23 +123,168 @@ def _calc_atr(bars: list, period: int = 14) -> float:
     return sum(recent) / len(recent)
 
 
+def _calc_sma(bars: list, period: int) -> float | None:
+    """Simple moving average of closes over last `period` bars."""
+    closes = [b["close"] for b in bars if b.get("close") is not None]
+    if len(closes) < period:
+        return None
+    return sum(closes[-period:]) / period
+
+
+def _calc_rsi(bars: list, period: int = 14) -> float:
+    """Wilder RSI. Returns 50.0 if insufficient data."""
+    closes = [b["close"] for b in bars if b.get("close") is not None]
+    if len(closes) < period + 1:
+        return 50.0
+    closes = closes[-(period * 3):]  # enough history for smoothing
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_g = sum(gains[:period]) / period
+    avg_l = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_g = (avg_g * (period - 1) + gains[i]) / period
+        avg_l = (avg_l * (period - 1) + losses[i]) / period
+    if avg_l == 0:
+        return 100.0
+    return round(100 - 100 / (1 + avg_g / avg_l), 2)
+
+
+def _calc_adx(bars: list, period: int = 14) -> float:
+    """Average Directional Index. Returns 0 if insufficient data."""
+    if len(bars) < period + 2:
+        return 0.0
+    bars = bars[-(period * 3):]
+    plus_dm, minus_dm, trs = [], [], []
+    for i in range(1, len(bars)):
+        h, l, ph, pl, pc = bars[i]["high"], bars[i]["low"], bars[i-1]["high"], bars[i-1]["low"], bars[i-1]["close"]
+        up, dn = h - ph, pl - l
+        plus_dm.append(up if up > dn and up > 0 else 0)
+        minus_dm.append(dn if dn > up and dn > 0 else 0)
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    def smooth(arr):
+        s = sum(arr[:period])
+        result = [s]
+        for v in arr[period:]:
+            s = s - s / period + v
+            result.append(s)
+        return result
+    str_ = smooth(trs); spdm = smooth(plus_dm); smdm = smooth(minus_dm)
+    dx_vals = []
+    for i in range(len(str_)):
+        if str_[i] == 0:
+            continue
+        pdi = 100 * spdm[i] / str_[i]
+        mdi = 100 * smdm[i] / str_[i]
+        dx_vals.append(100 * abs(pdi - mdi) / (pdi + mdi) if (pdi + mdi) > 0 else 0)
+    if not dx_vals:
+        return 0.0
+    return sum(dx_vals[-period:]) / min(len(dx_vals), period)
+
+
+def _calc_vwap_at(day_bars: list, before_dt) -> float | None:
+    """Cumulative VWAP for the day up to (not including) before_dt."""
+    cum_tpv = cum_vol = 0.0
+    for b in day_bars:
+        if _bar_dt(b) >= before_dt:
+            break
+        h, l, c, v = b["high"], b["low"], b["close"], b.get("volume", 0) or 0
+        if None in (h, l, c):
+            continue
+        cum_tpv += (h + l + c) / 3 * v
+        cum_vol += v
+    return cum_tpv / cum_vol if cum_vol > 0 else None
+
+
+def _check_or30_breakout(day_bars: list, bias: str, before_dt) -> bool:
+    """
+    Returns True if price already broke the first-30-min OR in `bias` direction
+    with above-average volume (Coach Dakota / Coach Jay urgency trade requirement).
+    """
+    or_bars = [b for b in day_bars
+               if 570 <= _bar_dt(b).hour * 60 + _bar_dt(b).minute < 600]
+    if len(or_bars) < 3:
+        return False
+    or_h = max(b["high"] for b in or_bars)
+    or_l = min(b["low"] for b in or_bars)
+    avg_vol = sum(b.get("volume", 0) for b in or_bars) / len(or_bars) or 1
+    post = [b for b in day_bars
+            if _bar_dt(b).hour * 60 + _bar_dt(b).minute >= 600
+            and _bar_dt(b) < before_dt]
+    for b in post:
+        vol = b.get("volume", 0) or 0
+        if bias == "bullish" and b["high"] > or_h and vol > avg_vol * 0.85:
+            return True
+        if bias == "bearish" and b["low"] < or_l and vol > avg_vol * 0.85:
+            return True
+    return False
+
+
+def _day_range_ratio(day_bars: list, prior_days: dict) -> float:
+    """
+    Today's OR range vs 5-day average range.
+    High ratio = chaotic/gap day — risky for setups.
+    """
+    if not day_bars or not prior_days:
+        return 1.0
+    recent = list(prior_days.values())[-5:]
+    if not recent:
+        return 1.0
+    avg_range = sum(
+        max(b["high"] for b in d) - min(b["low"] for b in d)
+        for d in recent if d
+    ) / len(recent)
+    if avg_range == 0:
+        return 1.0
+    today_range = max(b["high"] for b in day_bars) - min(b["low"] for b in day_bars)
+    return today_range / avg_range
+
+
 def _simulate_trade(entry_price: float, stop: float, target: float,
-                    direction: str, forward_bars: list) -> dict:
-    """Walk forward bars; return which level was hit first."""
+                    direction: str, forward_bars: list,
+                    stop_dist: float = 0.0) -> dict:
+    """
+    Walk forward bars. Uses a partial-TP strategy (prop-trader approach):
+    - At +1R (entry + stop_dist): take 50% off, move stop to breakeven
+    - At +2R (target): full exit — win
+    - If stopped at breakeven after 1R hit: partial_win
+    - If stopped before 1R: loss
+    - EOD close: win/loss based on direction vs entry (breakeven counts as partial_win)
+    """
+    partial_r    = entry_price + stop_dist if direction == "bullish" else entry_price - stop_dist
+    be_stop      = entry_price  # breakeven stop after partial
+    partial_hit  = False
+
     for b in forward_bars:
         h, l = b.get("high", 0), b.get("low", 0)
         if direction == "bullish":
-            if l <= stop:
-                return {"result": "loss", "exit_price": stop}
-            if h >= target:
-                return {"result": "win",  "exit_price": target}
+            if not partial_hit:
+                if l <= stop:
+                    return {"result": "loss", "exit_price": stop}
+                if h >= partial_r:
+                    partial_hit = True  # 1R hit — move stop to BE, continue for 2R
+            else:
+                if l <= be_stop:
+                    return {"result": "partial_win", "exit_price": be_stop}
+                if h >= target:
+                    return {"result": "win", "exit_price": target}
         else:
-            if h >= stop:
-                return {"result": "loss", "exit_price": stop}
-            if l <= target:
-                return {"result": "win",  "exit_price": target}
-    # Killzone ended without hitting stop or target — close at EOD price
+            if not partial_hit:
+                if h >= stop:
+                    return {"result": "loss", "exit_price": stop}
+                if l <= partial_r:
+                    partial_hit = True
+            else:
+                if h >= be_stop:
+                    return {"result": "partial_win", "exit_price": be_stop}
+                if l <= target:
+                    return {"result": "win", "exit_price": target}
+
     last = forward_bars[-1]["close"] if forward_bars else entry_price
+    if partial_hit:
+        return {"result": "partial_win", "exit_price": last, "eod": True}
     if direction == "bullish":
         eod_result = "win" if last > entry_price else "loss"
     else:
@@ -163,7 +340,9 @@ def _get_30min_vwap_bias(day_bars: list, bar_dt) -> str:
 
 def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str = "MNQ",
                          start_bar_index: int = 6, htf_direction: str = "neutral",
-                         used_entries: list | None = None) -> dict | None:
+                         used_entries: list | None = None,
+                         kz_start: tuple = (9, 30), kz_end: tuple = (11, 30),
+                         prior_days: dict | None = None) -> dict | None:
     """
     Walk through the NY killzone bars one at a time; return the first
     A or A+ setup with a sweep + iFVG.
@@ -172,9 +351,9 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
     """
     kz_bars = [
         b for b in day_bars
-        if KZ_START[0] * 60 + KZ_START[1]
+        if kz_start[0] * 60 + kz_start[1]
            <= _bar_dt(b).hour * 60 + _bar_dt(b).minute
-           <= KZ_END[0] * 60 + KZ_END[1]
+           <= kz_end[0] * 60 + kz_end[1]
     ]
     if len(kz_bars) < 6:
         return None
@@ -208,14 +387,95 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         if vwap_bias != "neutral" and vwap_bias != bias:
             continue
 
+        # ── QUALITY FILTERS ────────────────────────────────────────────────────
+
+        # 1. Minimum ICT score: require 65+ (well above grade A floor of 55)
+        setup_score_pre = long_sc if bias == "bullish" else short_sc
+        if setup_score_pre < 65:
+            continue
+
+        # 2. VWAP position: price must be on correct side of day VWAP
+        #    Tolerance: 0.3% (50pt on NQ) — tight enough to exclude clear contra-trend entries
+        vwap_now = _calc_vwap_at(day_bars, bar_dt)
+        if vwap_now:
+            if bias == "bullish" and price < vwap_now * 0.997:
+                continue   # price clearly below VWAP = skip long
+            if bias == "bearish" and price > vwap_now * 1.003:
+                continue   # price clearly above VWAP = skip short
+
+        # 3. 200 SMA (5-min) trend filter — skip only when price is strongly contra-trend
+        #    200 × 5m = 1000 min ≈ 2.5 trading days; context must be large enough
+        sma200 = _calc_sma(context, 200)
+        if sma200 is not None:
+            if bias == "bullish" and price < sma200 * 0.996:
+                continue   # >0.4% below 200 SMA = skip long
+            if bias == "bearish" and price > sma200 * 1.004:
+                continue   # >0.4% above 200 SMA = skip short
+
+        # 4. ADX: skip ranging/choppy markets — ICT setups fail most in no-trend zones
+        adx = _calc_adx(context[-60:])
+        if adx < 12:
+            continue
+
+        # 5. RSI: don't chase overbought longs or oversold shorts
+        rsi = _calc_rsi(context[-60:])
+        if bias == "bullish" and rsi > 75:
+            continue
+        if bias == "bearish" and rsi < 25:
+            continue
+
+        # 6. Avoid entries when market is in extreme volatility (tariff/FOMC/VIX-spike mode)
+        if prior_days:
+            rr = _day_range_ratio(day_bars, prior_days)
+            if rr > 2.2:
+                continue  # today is >2.2× normal range = chaotic/fake setups
+
+            # 3-day volatility regime filter: if ANY of the last 3 trading days had an
+            # intraday range > 4% of open, market is in post-event carry-over mode.
+            # (4% on NQ@17k = 680pts; normal range is ~200pts)
+            prior_list = list(prior_days.values())
+            skip_volatile = False
+            for prev_bars in prior_list[-3:]:
+                if prev_bars and prev_bars[0]["open"] > 0:
+                    day_range_pct = (max(b["high"] for b in prev_bars) -
+                                     min(b["low"] for b in prev_bars)) / prev_bars[0]["open"]
+                    if day_range_pct > 0.04:  # >4% range = extreme carry-over volatility
+                        skip_volatile = True
+                        break
+            if skip_volatile:
+                continue
+
         adv = get_advanced_signals(
             bars=context, session_levels=sl, equal_hl=ehl,
             bars_secondary=[], bias_direction=bias,
         )
 
         sweeps = adv.get("liquidity_sweeps") or []
-        recent = [s for s in sweeps if s.get("direction") == bias]
+        # Fresh sweeps: sweep time within 90 min of current bar (use bar_dt for backtest accuracy)
+        recent = []
+        for s in sweeps:
+            if s.get("direction") != bias:
+                continue
+            s_time = s.get("time")
+            if s_time:
+                try:
+                    s_dt = _bar_dt({"time": s_time})
+                    mins_since = (bar_dt - s_dt).total_seconds() / 60
+                    if 0 <= mins_since <= 90:
+                        recent.append(s)
+                except Exception:
+                    recent.append(s)  # include if time parsing fails
+            else:
+                recent.append(s)
         if not recent:
+            continue
+
+        # Displacement candle: MSS/CHoCH confirmed in setup direction
+        mss = adv.get("mss_choch") or {}
+        last_struct = (mss.get("last_structure") or "").lower()
+        if bias == "bullish" and "bullish" not in last_struct:
+            continue
+        if bias == "bearish" and "bearish" not in last_struct:
             continue
 
         ifvgs = analysis.get("ifvgs") or []
@@ -264,10 +524,16 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
             stop_dist  = max(sweep_dist, atr_dist, min_st)
             stop       = entry + stop_dist
 
-        # Target: use DOL only if it gives ≥ 2R; otherwise use 2R from entry
+        # ATR stop cap: if stop is too wide, market is too volatile — skip trade
+        # Prevents outsized losses on tariff/FOMC/VIX-spike days
+        max_stop = {"MNQ": 120.0, "MES": 60.0, "MGC": 12.0}.get(instrument.upper(), 120.0)
+        if stop_dist > max_stop:
+            continue
+
+        # Target: use DOL if it gives ≥ 1.5R (more realistic than requiring 2R)
         dol       = analysis.get("draw_on_liquidity") or {}
         dol_tgt   = dol.get("target")
-        if dol_tgt and abs(dol_tgt - entry) >= 2.0 * stop_dist:
+        if dol_tgt and abs(dol_tgt - entry) >= 1.5 * stop_dist:
             target = dol_tgt
         else:
             target = (entry + 2.0 * stop_dist if bias == "bullish"
@@ -303,7 +569,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
 def run_backtest(
     symbol:            str = Query(default="NQ=F", description="NQ=F, ES=F, or GC=F"),
     instrument:        str = Query(default="MNQ"),
-    lookback_days:     int = Query(default=30, ge=5, le=60),
+    lookback_days:     int = Query(default=30, ge=5, le=90),
     contracts:         int = Query(default=1, ge=1, le=20, description="Number of contracts per trade"),
     daily_loss_limit:  int = Query(default=1000, ge=100, le=5000, description="Daily loss limit in USD"),
 ):
@@ -341,13 +607,18 @@ def run_backtest(
         htf_result = get_htf_bias(htf_bars) if len(htf_bars) >= 22 else {"bias": "neutral"}
         htf_dir = htf_result.get("bias", "neutral")
 
-        # Daily limit: 1 win = done; 2nd loss = done. Max 2 attempts per day.
+        # Monday/Friday: reaction days and pre-weekend chop — skip for cleaner setups
+        if d.weekday() in (0, 4):
+            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
+            continue
+
+        # 1 trade per day: first valid setup taken; no second attempt (prevents revenge trading)
         day_losses  = 0
         next_start  = 6   # bar index to resume search from
         day_traded  = False
         used_entries: list = []   # FVG entry prices already traded today
 
-        while day_losses < 2:
+        while day_losses < 1:
             # Daily loss limit — stop trading for the day if DLL is hit
             day_loss_usd = sum(t["pnl"] for t in trades if t["date"] == d.isoformat())
             if day_loss_usd <= -daily_loss_limit:
@@ -357,17 +628,35 @@ def run_backtest(
                                          instrument=instrument.upper(),
                                          start_bar_index=next_start,
                                          htf_direction=htf_dir,
-                                         used_entries=used_entries)
+                                         used_entries=used_entries,
+                                         prior_days={pd: by_day[pd] for pd in days_sorted[:i]})
             if not setup:
                 break
 
             outcome = _simulate_trade(
                 setup["entry"], setup["stop"], setup["target"],
                 setup["direction"], setup["remaining_bars"],
+                stop_dist=setup["stop_dist"],
             )
 
-            pts = (outcome["exit_price"] - setup["entry"]) if setup["direction"] == "bullish" \
-                  else (setup["entry"] - outcome["exit_price"])
+            res = outcome["result"]
+            exit_p = outcome["exit_price"]
+            sd = setup["stop_dist"]
+
+            # P&L calculation:
+            # win         = full 2R → exit_price is target
+            # partial_win = 1R hit → 50% exited at 1R (entry+sd), 50% at breakeven (entry)
+            #               net = 0.5 × sd (half position made sd, half made 0)
+            # loss        = stopped at stop → full loss
+            if res == "win":
+                pts = (exit_p - setup["entry"]) if setup["direction"] == "bullish" \
+                      else (setup["entry"] - exit_p)
+            elif res == "partial_win":
+                pts = sd * 0.5  # net of partial strategy: 50%×1R + 50%×0R
+            else:
+                pts = (exit_p - setup["entry"]) if setup["direction"] == "bullish" \
+                      else (setup["entry"] - exit_p)
+
             pnl = round(pts * usd_per_pt, 2)
             running_pnl += pnl
             day_traded = True
@@ -382,14 +671,14 @@ def run_backtest(
                 "entry":       setup["entry"],
                 "stop":        setup["stop"],
                 "target":      setup["target"],
-                "exit_price":  outcome["exit_price"],
-                "result":      outcome["result"],
+                "exit_price":  exit_p,
+                "result":      res,
                 "eod":         outcome.get("eod", False),
                 "pts":         round(pts, 2),
                 "pnl":         pnl,
-                "rr_achieved": round(pts / setup["stop_dist"], 2) if setup["stop_dist"] else 0,
+                "rr_achieved": round(pts / sd, 2) if sd else 0,
                 "rr_planned":  setup["rr_ratio"],
-                "stop_dist":   setup["stop_dist"],
+                "stop_dist":   sd,
                 "sweep":       setup["sweep_label"],
                 "fvg_zone":    setup["fvg_zone"],
                 "dol":         setup["dol_reason"],
@@ -398,21 +687,16 @@ def run_backtest(
             trades.append(trade)
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
 
-            if outcome["result"] == "win":
-                break  # protected the day — stop trading
-            elif outcome["result"] == "loss":
-                used_entries.append(setup["entry"])
+            # 1 trade per day — always break after first trade
+            if res == "loss":
                 day_losses += 1
-                next_start = setup["bar_index"] + 1  # resume search after this bar
-            else:
-                # expired = killzone ended without resolution — no second attempt
-                break
+            break
 
         if not day_traded:
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
 
     # ── Statistics ────────────────────────────────────────────────────────────
-    wins   = [t for t in trades if t["result"] == "win"]
+    wins   = [t for t in trades if t["result"] in ("win", "partial_win")]
     losses = [t for t in trades if t["result"] == "loss"]
     total  = len(trades)
     win_rate   = round(len(wins) / total * 100, 1) if total else 0
@@ -465,3 +749,196 @@ def _calc_max_drawdown(equity_curve: list) -> float:
         if dd > max_dd:
             max_dd = dd
     return round(max_dd, 2)
+
+
+# ── Asia / Overnight Session Backtest ─────────────────────────────────────────
+
+def _run_session_backtest(
+    symbol: str, instrument: str, lookback_days: int,
+    contracts: int, daily_loss_limit: int,
+    kz_start: tuple, kz_end: tuple,
+    session_label: str,
+    start_bar_index: int = 3,
+) -> dict:
+    """
+    Shared engine for any session (NY, Asia, London).
+    kz_start / kz_end are ET hour/minute tuples.
+    For overnight sessions, bars span two calendar dates — handled via _bar_dt.
+    """
+    config     = _INSTRUMENT_CONFIG.get(instrument.upper(), _INSTRUMENT_CONFIG["MNQ"])
+    usd_per_pt = config["dollars_per_point"] * contracts
+
+    end_dt   = datetime.now(tz=UTC)
+    start_dt = end_dt - timedelta(days=lookback_days + 5)
+
+    bars_all = _download(symbol, start_dt, end_dt + timedelta(hours=2), "5m")
+    if not bars_all:
+        return {"error": f"No data for {symbol}"}
+
+    daily_bars_all = _download(symbol, end_dt - timedelta(days=90), end_dt, "1d")
+    by_day  = _group_by_day(bars_all)
+    trades  = []
+    running_pnl  = 0.0
+    equity_curve = []
+    days_sorted  = sorted(by_day.keys())
+
+    for i, d in enumerate(days_sorted):
+        if d.weekday() >= 5:
+            continue
+
+        day_bars   = by_day[d]
+        prior_bars = []
+        for pd in days_sorted[:i]:
+            prior_bars.extend(by_day[pd])
+        prior_bars = prior_bars[-300:]
+
+        # For Asia session, combine yesterday evening + today early-AM bars
+        # by_day groups by ET date, so Asia bars (7PM-11PM) live on the *previous* day key
+        if kz_start[0] >= 17:  # evening session
+            prev_idx = i - 1
+            prev_day = days_sorted[prev_idx] if prev_idx >= 0 else None
+            session_bars = (by_day.get(prev_day, []) if prev_day else []) + day_bars
+        else:
+            session_bars = day_bars
+
+        htf_bars = [b for b in daily_bars_all if b["time"][:10] < d.isoformat()]
+        htf_result = get_htf_bias(htf_bars) if len(htf_bars) >= 22 else {"bias": "neutral"}
+        htf_dir = htf_result.get("bias", "neutral")
+
+        day_losses = 0
+        next_start = start_bar_index
+        day_traded = False
+        used_entries: list = []
+
+        while day_losses < 1:
+            day_loss_usd = sum(t["pnl"] for t in trades if t["date"] == d.isoformat())
+            if day_loss_usd <= -daily_loss_limit:
+                break
+
+            setup = _find_killzone_setup(
+                session_bars, prior_bars,
+                instrument=instrument.upper(),
+                start_bar_index=next_start,
+                htf_direction=htf_dir,
+                used_entries=used_entries,
+                kz_start=kz_start, kz_end=kz_end,
+                prior_days={pd: by_day[pd] for pd in days_sorted[:i]},
+            )
+            if not setup:
+                break
+
+            sd = setup["stop_dist"]
+            outcome = _simulate_trade(
+                setup["entry"], setup["stop"], setup["target"],
+                setup["direction"], setup["remaining_bars"],
+                stop_dist=sd,
+            )
+            res = outcome["result"]
+            exit_p = outcome["exit_price"]
+            if res == "win":
+                pts = (exit_p - setup["entry"]) if setup["direction"] == "bullish" \
+                      else (setup["entry"] - exit_p)
+            elif res == "partial_win":
+                pts = sd * 0.5
+            else:
+                pts = (exit_p - setup["entry"]) if setup["direction"] == "bullish" \
+                      else (setup["entry"] - exit_p)
+
+            pnl = round(pts * usd_per_pt, 2)
+            running_pnl += pnl
+            day_traded = True
+
+            trades.append({
+                "date": d.isoformat(), "day": d.strftime("%a %b %d"),
+                "session": session_label,
+                "direction": setup["direction"], "grade": setup["grade"],
+                "score": setup["score"], "htf_dir": htf_dir,
+                "entry": setup["entry"], "stop": setup["stop"],
+                "target": setup["target"], "exit_price": exit_p,
+                "result": res, "eod": outcome.get("eod", False),
+                "pts": round(pts, 2), "pnl": pnl,
+                "rr_achieved": round(pts / sd, 2) if sd else 0,
+                "rr_planned": setup["rr_ratio"],
+                "stop_dist": sd,
+                "running_pnl": round(running_pnl, 2),
+            })
+            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
+
+            if res == "loss":
+                day_losses += 1
+            break
+
+        if not day_traded:
+            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
+
+    wins   = [t for t in trades if t["result"] in ("win", "partial_win")]
+    losses = [t for t in trades if t["result"] == "loss"]
+    total  = len(trades)
+    win_rate = round(len(wins) / total * 100, 1) if total else 0
+    avg_win  = round(sum(t["pnl"] for t in wins)   / len(wins),   2) if wins   else 0
+    avg_loss = round(sum(t["pnl"] for t in losses) / len(losses), 2) if losses else 0
+    pf       = round(abs(sum(t["pnl"] for t in wins)) /
+                     max(abs(sum(t["pnl"] for t in losses)), 0.01), 2)
+    avg_rr   = round(sum(t["rr_achieved"] for t in trades) / total, 2) if total else 0
+    monthly_projection = round(running_pnl / max(lookback_days, 1) * 21, 2)
+
+    return {
+        "symbol": symbol, "instrument": instrument.upper(),
+        "session": session_label, "contracts": contracts,
+        "lookback_days": lookback_days,
+        "stats": {
+            "total_trades": total, "wins": len(wins), "losses": len(losses),
+            "eod_closes": len([t for t in trades if t.get("eod")]),
+            "win_rate": win_rate, "total_pnl": round(running_pnl, 2),
+            "monthly_projection": monthly_projection,
+            "avg_win": avg_win, "avg_loss": avg_loss,
+            "profit_factor": pf, "avg_rr": avg_rr,
+            "max_drawdown": _calc_max_drawdown(equity_curve),
+            "best_trade":  max(trades, key=lambda t: t["pnl"], default=None),
+            "worst_trade": min(trades, key=lambda t: t["pnl"], default=None),
+        },
+        "trades": trades, "equity_curve": equity_curve,
+    }
+
+
+@router.get("/run-asia")
+def run_backtest_asia(
+    symbol:           str = Query(default="NQ=F"),
+    instrument:       str = Query(default="MNQ"),
+    lookback_days:    int = Query(default=30, ge=5, le=90),
+    contracts:        int = Query(default=1, ge=1, le=20),
+    daily_loss_limit: int = Query(default=1000),
+):
+    """
+    Asia/Overnight session backtest (7:00 PM – 10:30 PM ET).
+    NQ Asia session follows direction set by US close + overnight futures sentiment.
+    """
+    return _run_session_backtest(
+        symbol=symbol, instrument=instrument,
+        lookback_days=lookback_days, contracts=contracts,
+        daily_loss_limit=daily_loss_limit,
+        kz_start=(19, 0), kz_end=(22, 30),
+        session_label="Asia",
+        start_bar_index=3,
+    )
+
+
+@router.get("/run-gold-asia")
+def run_backtest_gold_asia(
+    instrument:       str = Query(default="MGC"),
+    lookback_days:    int = Query(default=30, ge=5, le=90),
+    contracts:        int = Query(default=1, ge=1, le=20),
+    daily_loss_limit: int = Query(default=1000),
+):
+    """
+    Gold (MGC) Asia/London Open session backtest (2:00 AM – 5:30 AM ET).
+    Gold is most reactive during Tokyo/London overlap — best sweep setups occur here.
+    """
+    return _run_session_backtest(
+        symbol="GC=F", instrument=instrument,
+        lookback_days=lookback_days, contracts=contracts,
+        daily_loss_limit=daily_loss_limit,
+        kz_start=(2, 0), kz_end=(5, 30),
+        session_label="Gold Asia/London",
+        start_bar_index=3,
+    )

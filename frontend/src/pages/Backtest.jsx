@@ -12,6 +12,8 @@ const PERIODS = [
   { value: 15, label: '15 days' },
   { value: 30, label: '30 days' },
   { value: 45, label: '45 days' },
+  { value: 60, label: '60 days' },
+  { value: 90, label: '90 days' },
 ]
 const CONTRACTS = [1, 2, 3, 4, 5]
 
@@ -70,10 +72,12 @@ function MiniEquityCurve({ curve }) {
 }
 
 function ResultBadge({ result, eod }) {
-  if (result === 'win'  && eod)  return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/20 opacity-70">EOD+</span>
-  if (result === 'loss' && eod)  return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/20 opacity-70">EOD−</span>
-  if (result === 'win')          return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/30">WIN</span>
-  if (result === 'loss')         return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/30">LOSS</span>
+  if (result === 'win'          && eod)  return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/20 opacity-70">EOD+</span>
+  if (result === 'loss'         && eod)  return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/20 opacity-70">EOD−</span>
+  if (result === 'win')                  return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/30">WIN</span>
+  if (result === 'partial_win'  && eod)  return <span className="text-[10px] font-bold text-terminal-yellow px-1.5 py-0.5 rounded bg-terminal-yellow/10 border border-terminal-yellow/20 opacity-70">P-EOD</span>
+  if (result === 'partial_win')          return <span className="text-[10px] font-bold text-terminal-yellow px-1.5 py-0.5 rounded bg-terminal-yellow/10 border border-terminal-yellow/30">+½R</span>
+  if (result === 'loss')                 return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/30">LOSS</span>
   return <span className="text-[10px] font-bold text-terminal-muted px-1.5 py-0.5 rounded bg-terminal-card border border-terminal-border">EXP</span>
 }
 
@@ -164,7 +168,7 @@ export default function Backtest() {
       {/* Disclaimer */}
       <div className="flex items-start gap-2 px-3 py-2 bg-terminal-yellow/5 border border-terminal-yellow/20 rounded text-xs text-terminal-yellow/80">
         <AlertCircle size={12} className="shrink-0 mt-0.5" />
-        Simulated results using Yahoo Finance 5m data. Only takes trades aligned with the daily HTF bias (no contra-trend entries). Up to 2 attempts per day — second attempt only if a different FVG zone exists. Max 45 days (intraday data limit). Past performance ≠ future results.
+        Simulated results using Yahoo Finance 5m data. Aligned with daily HTF bias, 1 trade/day (Mon+Fri skipped), partial TP at 1R + move stop to breakeven. Up to 90 days (chunked download). Past performance ≠ future results.
       </div>
 
       {!data && !running && (
