@@ -77,6 +77,20 @@ def _group_by_day(bars: list) -> dict:
 
 # ── Trade simulator ───────────────────────────────────────────────────────────
 
+def _calc_atr(bars: list, period: int = 14) -> float:
+    """Average True Range over last `period` bars."""
+    if len(bars) < 2:
+        return 15.0
+    trs = []
+    for i in range(1, len(bars)):
+        h, l, pc = bars[i]["high"], bars[i]["low"], bars[i - 1]["close"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if not trs:
+        return 15.0
+    recent = trs[-period:]
+    return sum(recent) / len(recent)
+
+
 def _simulate_trade(entry_price: float, stop: float, target: float,
                     direction: str, forward_bars: list) -> dict:
     """Walk forward bars; return which level was hit first."""
@@ -92,8 +106,13 @@ def _simulate_trade(entry_price: float, stop: float, target: float,
                 return {"result": "loss", "exit_price": stop}
             if l <= target:
                 return {"result": "win",  "exit_price": target}
+    # Killzone ended without hitting stop or target — close at EOD price
     last = forward_bars[-1]["close"] if forward_bars else entry_price
-    return {"result": "expired", "exit_price": last}
+    if direction == "bullish":
+        eod_result = "win" if last > entry_price else "loss"
+    else:
+        eod_result = "win" if last < entry_price else "loss"
+    return {"result": eod_result, "exit_price": last, "eod": True}
 
 
 # ── 30-min VWAP bias (Coach Dakota filter) ───────────────────────────────────
@@ -230,19 +249,25 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         if used_entries and any(abs(entry - prev) < min_st for prev in used_entries):
             continue
 
-        if bias == "bullish":
-            raw_stop = (min(recent[-1].get("wick_low", recent[-1]["level"]),
-                           fvg["bottom"]) - buf)
-            stop    = min(raw_stop, entry - min_st)
-        else:
-            raw_stop = (max(recent[-1].get("wick_high", recent[-1]["level"]),
-                           fvg["top"]) + buf)
-            stop    = max(raw_stop, entry + min_st)
+        # ATR-based stop: 2× ATR gives room for normal noise (Coach Ball / Coach Dakota)
+        atr       = _calc_atr(context[-50:])
+        atr_dist  = atr * 2.0
 
-        stop_dist = abs(entry - stop)
+        if bias == "bullish":
+            sweep_stop = (min(recent[-1].get("wick_low",  recent[-1]["level"]), fvg["bottom"]) - buf)
+            sweep_dist = entry - sweep_stop
+            stop_dist  = max(sweep_dist, atr_dist, min_st)
+            stop       = entry - stop_dist
+        else:
+            sweep_stop = (max(recent[-1].get("wick_high", recent[-1]["level"]), fvg["top"]) + buf)
+            sweep_dist = sweep_stop - entry
+            stop_dist  = max(sweep_dist, atr_dist, min_st)
+            stop       = entry + stop_dist
+
+        # Target: use DOL only if it gives ≥ 2R; otherwise use 2R from entry
         dol       = analysis.get("draw_on_liquidity") or {}
         dol_tgt   = dol.get("target")
-        if dol_tgt and abs(dol_tgt - entry) > stop_dist:
+        if dol_tgt and abs(dol_tgt - entry) >= 2.0 * stop_dist:
             target = dol_tgt
         else:
             target = (entry + 2.0 * stop_dist if bias == "bullish"
@@ -276,12 +301,14 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
 
 @router.get("/run")
 def run_backtest(
-    symbol:        str = Query(default="NQ=F", description="NQ=F, ES=F, or GC=F"),
-    instrument:    str = Query(default="MNQ"),
-    lookback_days: int = Query(default=30, ge=5, le=60),
+    symbol:            str = Query(default="NQ=F", description="NQ=F, ES=F, or GC=F"),
+    instrument:        str = Query(default="MNQ"),
+    lookback_days:     int = Query(default=30, ge=5, le=60),
+    contracts:         int = Query(default=1, ge=1, le=20, description="Number of contracts per trade"),
+    daily_loss_limit:  int = Query(default=1000, ge=100, le=5000, description="Daily loss limit in USD"),
 ):
     config     = _INSTRUMENT_CONFIG.get(instrument.upper(), _INSTRUMENT_CONFIG["MNQ"])
-    usd_per_pt = config["dollars_per_point"]
+    usd_per_pt = config["dollars_per_point"] * contracts
 
     end_dt   = datetime.now(tz=UTC)
     start_dt = end_dt - timedelta(days=lookback_days + 3)
@@ -321,6 +348,11 @@ def run_backtest(
         used_entries: list = []   # FVG entry prices already traded today
 
         while day_losses < 2:
+            # Daily loss limit — stop trading for the day if DLL is hit
+            day_loss_usd = sum(t["pnl"] for t in trades if t["date"] == d.isoformat())
+            if day_loss_usd <= -daily_loss_limit:
+                break
+
             setup = _find_killzone_setup(day_bars, prior_bars,
                                          instrument=instrument.upper(),
                                          start_bar_index=next_start,
@@ -352,10 +384,12 @@ def run_backtest(
                 "target":      setup["target"],
                 "exit_price":  outcome["exit_price"],
                 "result":      outcome["result"],
+                "eod":         outcome.get("eod", False),
                 "pts":         round(pts, 2),
                 "pnl":         pnl,
                 "rr_achieved": round(pts / setup["stop_dist"], 2) if setup["stop_dist"] else 0,
                 "rr_planned":  setup["rr_ratio"],
+                "stop_dist":   setup["stop_dist"],
                 "sweep":       setup["sweep_label"],
                 "fvg_zone":    setup["fvg_zone"],
                 "dol":         setup["dol_reason"],
@@ -391,25 +425,30 @@ def run_backtest(
     worst_trade = min(trades, key=lambda t: t["pnl"], default=None)
     max_drawdown = _calc_max_drawdown(equity_curve)
 
+    trading_days = len([d for d in days_sorted if d.weekday() < 5])
+    monthly_projection = round(running_pnl / max(lookback_days, 1) * 21, 2)  # 21 trading days/month
+
     return {
         "symbol":        symbol,
         "instrument":    instrument.upper(),
+        "contracts":     contracts,
         "lookback_days": lookback_days,
-        "trading_days":  len([d for d in days_sorted if by_day[d][0] if d.weekday() < 5]),
+        "trading_days":  trading_days,
         "stats": {
-            "total_trades":   total,
-            "wins":           len(wins),
-            "losses":         len(losses),
-            "expired":        len([t for t in trades if t["result"] == "expired"]),
-            "win_rate":       win_rate,
-            "total_pnl":      round(running_pnl, 2),
-            "avg_win":        avg_win,
-            "avg_loss":       avg_loss,
-            "profit_factor":  pf,
-            "avg_rr":         avg_rr,
-            "max_drawdown":   max_drawdown,
-            "best_trade":     best_trade,
-            "worst_trade":    worst_trade,
+            "total_trades":        total,
+            "wins":                len(wins),
+            "losses":              len(losses),
+            "eod_closes":          len([t for t in trades if t.get("eod")]),
+            "win_rate":            win_rate,
+            "total_pnl":           round(running_pnl, 2),
+            "monthly_projection":  monthly_projection,
+            "avg_win":             avg_win,
+            "avg_loss":            avg_loss,
+            "profit_factor":       pf,
+            "avg_rr":              avg_rr,
+            "max_drawdown":        max_drawdown,
+            "best_trade":          best_trade,
+            "worst_trade":         worst_trade,
         },
         "trades":        trades,
         "equity_curve":  equity_curve,

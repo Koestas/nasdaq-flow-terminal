@@ -13,6 +13,7 @@ const PERIODS = [
   { value: 30, label: '30 days' },
   { value: 45, label: '45 days' },
 ]
+const CONTRACTS = [1, 2, 3, 4, 5]
 
 function StatCard({ label, value, sub, color = 'text-terminal-text', icon }) {
   return (
@@ -68,9 +69,11 @@ function MiniEquityCurve({ curve }) {
   )
 }
 
-function ResultBadge({ result }) {
-  if (result === 'win')     return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/30">WIN</span>
-  if (result === 'loss')    return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/30">LOSS</span>
+function ResultBadge({ result, eod }) {
+  if (result === 'win'  && eod)  return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/20 opacity-70">EOD+</span>
+  if (result === 'loss' && eod)  return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/20 opacity-70">EOD−</span>
+  if (result === 'win')          return <span className="text-[10px] font-bold text-terminal-green px-1.5 py-0.5 rounded bg-terminal-green/10 border border-terminal-green/30">WIN</span>
+  if (result === 'loss')         return <span className="text-[10px] font-bold text-terminal-red px-1.5 py-0.5 rounded bg-terminal-red/10 border border-terminal-red/30">LOSS</span>
   return <span className="text-[10px] font-bold text-terminal-muted px-1.5 py-0.5 rounded bg-terminal-card border border-terminal-border">EXP</span>
 }
 
@@ -82,15 +85,16 @@ function GradeBadge({ grade }) {
 }
 
 export default function Backtest() {
-  const [symIdx,   setSymIdx]   = useState(0)
-  const [period,   setPeriod]   = useState(30)
-  const [runKey,   setRunKey]   = useState(null)
+  const [symIdx,    setSymIdx]    = useState(0)
+  const [period,    setPeriod]    = useState(30)
+  const [contracts, setContracts] = useState(1)
+  const [runKey,    setRunKey]    = useState(null)
 
   const sym = SYMBOLS[symIdx]
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['backtest', sym.value, sym.instrument, period, runKey],
-    queryFn: () => apiFetch(`/api/backtest/run?symbol=${encodeURIComponent(sym.value)}&instrument=${sym.instrument}&lookback_days=${period}`),
+    queryKey: ['backtest', sym.value, sym.instrument, period, contracts, runKey],
+    queryFn: () => apiFetch(`/api/backtest/run?symbol=${encodeURIComponent(sym.value)}&instrument=${sym.instrument}&lookback_days=${period}&contracts=${contracts}&daily_loss_limit=1000`),
     enabled: runKey !== null,
     staleTime: Infinity,
     retry: false,
@@ -134,6 +138,17 @@ export default function Backtest() {
             >{p.label}</button>
           ))}
         </div>
+        <div className="w-px h-5 bg-terminal-border" />
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-terminal-muted mr-1">Contracts:</span>
+          {CONTRACTS.map(c => (
+            <button key={c} onClick={() => setContracts(c)}
+              className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+                contracts === c ? 'bg-terminal-blue/30 text-terminal-blue border border-terminal-blue/50' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'
+              }`}
+            >{c}</button>
+          ))}
+        </div>
         <div className="ml-auto flex items-center gap-2">
           {running && <span className="text-xs text-terminal-yellow animate-pulse">Running simulation...</span>}
           <button
@@ -163,17 +178,23 @@ export default function Backtest() {
         <>
           {/* Stats grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-            <StatCard label="Trades" value={stats.total_trades ?? 0} sub={`${data.lookback_days}d window`} />
+            <StatCard label="Trades" value={stats.total_trades ?? 0} sub={`${data.lookback_days}d · ${data.contracts}×`} />
             <StatCard
               label="Win Rate"
               value={`${stats.win_rate ?? 0}%`}
-              sub={`${stats.wins}W · ${stats.losses}L · ${stats.expired}X`}
-              color={stats.win_rate >= 55 ? 'text-terminal-green' : stats.win_rate >= 40 ? 'text-terminal-yellow' : 'text-terminal-red'}
+              sub={`${stats.wins}W · ${stats.losses}L · ${stats.eod_closes ?? 0} EOD`}
+              color={stats.win_rate >= 60 ? 'text-terminal-green' : stats.win_rate >= 45 ? 'text-terminal-yellow' : 'text-terminal-red'}
+            />
+            <StatCard
+              label="Monthly Est."
+              value={`$${fmt.num(stats.monthly_projection ?? 0)}`}
+              sub={`${data.contracts}× ${sym.instrument} · 21 days`}
+              color={(stats.monthly_projection ?? 0) >= 3000 ? 'text-terminal-green' : (stats.monthly_projection ?? 0) >= 1500 ? 'text-terminal-yellow' : 'text-terminal-red'}
             />
             <StatCard
               label="Total P&L"
               value={`$${fmt.num(stats.total_pnl ?? 0)}`}
-              sub={sym.instrument}
+              sub={`${data.lookback_days}d actual`}
               color={(stats.total_pnl ?? 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'}
             />
             <StatCard
@@ -269,7 +290,7 @@ export default function Backtest() {
                             {t.pnl >= 0 ? '+' : ''}${t.pnl}
                           </td>
                           <td className="px-3 py-1.5 font-mono text-terminal-yellow">{t.rr_achieved}R</td>
-                          <td className="px-3 py-1.5"><ResultBadge result={t.result} /></td>
+                          <td className="px-3 py-1.5"><ResultBadge result={t.result} eod={t.eod} /></td>
                           <td className={`px-3 py-1.5 font-mono ${t.running_pnl >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}>
                             ${fmt.num(t.running_pnl)}
                           </td>

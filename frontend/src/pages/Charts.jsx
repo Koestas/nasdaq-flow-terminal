@@ -35,6 +35,7 @@ export default function Charts() {
   const [hovered, setHovered] = useState(null)
   const [overlays, setOverlays] = useState(DEFAULT_OVERLAYS)
   const [volColor, setVolColor] = useState(false)
+  const [showSma200, setShowSma200] = useState(false)
 
   const { symbol, ictSymbol } = SYMBOLS[symbolIndex]
 
@@ -43,6 +44,7 @@ export default function Charts() {
   const candleRef     = useRef(null)
   const volumeRef     = useRef(null)
   const vwapRef       = useRef(null)
+  const sma200Ref     = useRef(null)
   const sessionLinesRef = useRef([])
   const ictLinesRef   = useRef([])
 
@@ -101,10 +103,17 @@ export default function Charts() {
       priceLineVisible: false, lastValueVisible: true,
     })
 
-    chartRef.current  = chart
-    candleRef.current = candle
-    volumeRef.current = volume
-    vwapRef.current   = vwap
+    const sma200 = chart.addLineSeries({
+      color: '#FFFFFF', lineWidth: 1, title: '200 SMA',
+      priceLineVisible: false, lastValueVisible: true,
+      lineStyle: 0,
+    })
+
+    chartRef.current   = chart
+    candleRef.current  = candle
+    volumeRef.current  = volume
+    vwapRef.current    = vwap
+    sma200Ref.current  = sma200
 
     chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.seriesData) { setHovered(null); return }
@@ -123,7 +132,7 @@ export default function Charts() {
     return () => {
       ro.disconnect()
       chart.remove()
-      chartRef.current = candleRef.current = volumeRef.current = vwapRef.current = null
+      chartRef.current = candleRef.current = volumeRef.current = vwapRef.current = sma200Ref.current = null
     }
   }, [])
 
@@ -165,8 +174,25 @@ export default function Charts() {
       .sort((a, b) => a.time - b.time)
     try { vwapRef.current.setData(vwapBars) } catch (e) { console.error(e) }
 
+    // 200 SMA — simple moving average over last 200 bars' closes
+    const smaBars = []
+    for (let i = 199; i < bars.length; i++) {
+      const slice = bars.slice(i - 199, i + 1)
+      const avg = slice.reduce((s, b) => s + b.close, 0) / 200
+      smaBars.push({ time: bars[i].time, value: parseFloat(avg.toFixed(4)) })
+    }
+    try { if (sma200Ref.current) sma200Ref.current.setData(smaBars) } catch (e) { console.error(e) }
+
     if (chartRef.current) chartRef.current.timeScale().fitContent()
   }, [data, volColor])
+
+  // ── Show / hide 200 SMA ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!sma200Ref.current) return
+    try {
+      sma200Ref.current.applyOptions({ visible: showSma200 })
+    } catch (_) {}
+  }, [showSma200])
 
   // ── Draw all price lines: session levels + ICT overlays ─────────────────
   useEffect(() => {
@@ -410,6 +436,17 @@ export default function Charts() {
             </button>
           ))}
           <div className="w-px h-4 bg-terminal-border" />
+          <button
+            onClick={() => setShowSma200((v) => !v)}
+            title="200 SMA on 30-min — white line — above = longs only, below = shorts only (Coach Dakota)"
+            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+              showSma200
+                ? 'border-slate-300/50 text-white bg-slate-500/10'
+                : 'border-terminal-border text-terminal-muted bg-terminal-card'
+            }`}
+          >
+            {showSma200 ? '✓ ' : ''}200 SMA
+          </button>
           <button
             onClick={() => setVolColor((v) => !v)}
             title="Volume-intensity candle coloring — brighter = more volume"
