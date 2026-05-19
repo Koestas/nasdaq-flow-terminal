@@ -22,7 +22,7 @@ const PERIOD_LABELS = {
   '6mo': '6M', '1y': '1Y', '2y': '2Y',
 }
 
-const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true, or30: false }
+const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true, or30: false, pivot: false }
 
 function toUnix(isoTime) {
   return Math.floor(new Date(isoTime).getTime() / 1000)
@@ -293,6 +293,25 @@ export default function Charts() {
         }
       }
     }
+
+    // Pivot Points — Standard formula from prior day H/L/C
+    if (overlays.pivot) {
+      const pdH = sl.prev_day_high
+      const pdL = sl.prev_day_low
+      const pdC = sl.prev_day_close
+      if (pdH && pdL && pdC) {
+        const P  = (pdH + pdL + pdC) / 3
+        const R1 = 2 * P - pdL
+        const R2 = P + (pdH - pdL)
+        const S1 = 2 * P - pdH
+        const S2 = P - (pdH - pdL)
+        addLine(ictLinesRef.current, P,  '#94A3B8', 'PP',  LineStyle.Solid,  2)
+        addLine(ictLinesRef.current, R1, '#34D399', 'R1',  LineStyle.Dashed, 1)
+        addLine(ictLinesRef.current, R2, '#34D39966', 'R2', LineStyle.Dotted, 1)
+        addLine(ictLinesRef.current, S1, '#F87171', 'S1',  LineStyle.Dashed, 1)
+        addLine(ictLinesRef.current, S2, '#F8717166', 'S2', LineStyle.Dotted, 1)
+      }
+    }
   }, [data, ictData, overlays, isIntraday])
 
   const isUp = hovered ? hovered.close >= hovered.open : true
@@ -375,7 +394,8 @@ export default function Charts() {
             { key: 'ob',   label: 'OB',      activeColor: 'border-blue-500/50 text-blue-400 bg-blue-500/10' },
             { key: 'eql',  label: 'EQL/EQH', activeColor: 'border-purple-500/50 text-purple-400 bg-purple-500/10' },
             { key: 'dol',  label: 'DOL',     activeColor: 'border-cyan-500/50 text-cyan-400 bg-cyan-500/10' },
-            { key: 'or30', label: 'OR 30m',  activeColor: 'border-purple-400/50 text-purple-300 bg-purple-500/10' },
+            { key: 'or30',  label: 'OR 30m',   activeColor: 'border-purple-400/50 text-purple-300 bg-purple-500/10' },
+            { key: 'pivot', label: 'Pivots',    activeColor: 'border-slate-400/50 text-slate-300 bg-slate-500/10' },
           ].map(({ key, label, activeColor }) => (
             <button
               key={key}

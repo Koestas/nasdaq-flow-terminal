@@ -96,6 +96,64 @@ function DailyPnLCard() {
   )
 }
 
+function Tech9Card({ data, isLoading }) {
+  if (isLoading) return (
+    <div className="card animate-pulse">
+      <div className="stat-label mb-2">TECH-9 BREADTH</div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {Array(9).fill(0).map((_, i) => (
+          <div key={i} className="h-6 rounded bg-terminal-border/40" />
+        ))}
+      </div>
+    </div>
+  )
+  const stocks = data?.stocks || []
+  const greenCount = data?.green_count ?? 0
+  const redCount = data?.red_count ?? 0
+  const allRed   = redCount === 9
+  const allGreen = greenCount === 9
+  const broadStrength = greenCount >= 7
+  const breadthColor = broadStrength ? 'text-terminal-green' : redCount >= 7 ? 'text-terminal-red' : 'text-terminal-yellow'
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-2">
+        <span className="stat-label">TECH-9 BREADTH</span>
+        <span className={`text-[10px] font-bold ${breadthColor}`}>{greenCount}/9 green</span>
+      </div>
+      <div className="grid grid-cols-3 gap-1 mb-2">
+        {stocks.map((s) => (
+          <div key={s.ticker} className={`flex items-center justify-between px-1.5 py-0.5 rounded text-[10px] font-mono
+            ${s.bullish ? 'bg-terminal-green/10 text-terminal-green' : 'bg-terminal-red/10 text-terminal-red'}`}>
+            <span className="font-bold">{s.ticker === 'GOOGL' ? 'GOOG' : s.ticker}</span>
+            <span>{s.change_pct != null ? `${s.change_pct > 0 ? '+' : ''}${s.change_pct.toFixed(1)}%` : '--'}</span>
+          </div>
+        ))}
+      </div>
+      {allRed && (
+        <div className="text-[10px] text-terminal-red bg-terminal-red/10 border border-terminal-red/20 rounded px-2 py-1 text-center font-bold">
+          FADE SIGNAL — All 9 red, watch for fake pump
+        </div>
+      )}
+      {allGreen && (
+        <div className="text-[10px] text-terminal-green bg-terminal-green/10 border border-terminal-green/20 rounded px-2 py-1 text-center font-bold">
+          BROAD STRENGTH — All 9 confirming
+        </div>
+      )}
+      {!allRed && !allGreen && broadStrength && (
+        <div className="text-[10px] text-terminal-green bg-terminal-green/10 border border-terminal-green/20 rounded px-2 py-1 text-center">
+          {greenCount}/9 leading — broad NASDAQ strength
+        </div>
+      )}
+      {!allRed && !allGreen && !broadStrength && redCount >= 7 && (
+        <div className="text-[10px] text-terminal-red bg-terminal-red/10 border border-terminal-red/20 rounded px-2 py-1 text-center">
+          {redCount}/9 red — broad NASDAQ weakness
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ExplainPanel({ title, children }) {
   const [open, setOpen] = useState(false)
   return (
@@ -139,6 +197,13 @@ export default function Overview() {
     queryKey: ['news'],
     queryFn: () => apiFetch('/api/market/news'),
     refetchInterval: 60_000,
+  })
+
+  const { data: tech9Data, isLoading: tech9Loading } = useQuery({
+    queryKey: ['tech9'],
+    queryFn: () => apiFetch('/api/market/tech9'),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
   })
 
   const price = data?.price
@@ -220,6 +285,11 @@ export default function Overview() {
           )}
         </ErrorBoundary>
       </div>
+
+      {/* Tech-9 Breadth */}
+      <ErrorBoundary>
+        <Tech9Card data={tech9Data} isLoading={tech9Loading} />
+      </ErrorBoundary>
 
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

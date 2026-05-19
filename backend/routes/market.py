@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Query
-from providers.yahoo import get_qqq_price, get_vwap, get_leadership_quotes, get_news, get_intraday, get_futures_quotes, get_chart_bars
+from providers.yahoo import get_qqq_price, get_vwap, get_leadership_quotes, get_news, get_intraday, get_futures_quotes, get_chart_bars, get_tech9
 from engines.bias import BiasEngine
 from engines.stats import calc_wave, calc_gex, calc_top_flow, calc_unusual
 from engines.ict import get_session_context, extract_session_levels
@@ -227,6 +227,15 @@ async def market_chart(
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@router.get("/tech9")
+async def market_tech9():
+    """Tech-9 breadth: Dakota's 9 key NASDAQ stocks for bias confirmation."""
+    try:
+        return get_tech9()
+    except Exception as e:
+        return {"error": str(e), "stocks": [], "green_count": 0, "red_count": 9}
 
 
 @router.get("/calendar")

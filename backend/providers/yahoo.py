@@ -15,6 +15,18 @@ NASDAQ_WEIGHTS = {
     "QQQ": 0.10, "SPY": 0.05,
 }
 
+TECH9_TICKERS = [
+    ("NVDA", "Nvidia"),
+    ("AAPL", "Apple"),
+    ("MSFT", "Microsoft"),
+    ("AMZN", "Amazon"),
+    ("GOOGL", "Google"),
+    ("TSLA", "Tesla"),
+    ("WMT", "Walmart"),
+    ("META", "Meta"),
+    ("AVGO", "Broadcom"),
+]
+
 
 def _clean(val):
     """Return None for NaN/Inf, else val."""
@@ -305,6 +317,35 @@ def get_daily_bars(ticker: str = "QQQ", period: str = "3mo") -> list:
         return bars
     except Exception:
         return []
+
+
+def get_tech9() -> dict:
+    """Fetch Tech-9 breadth: Dakota's 9 key NASDAQ stocks for bias confirmation."""
+    result = []
+    for ticker, name in TECH9_TICKERS:
+        try:
+            info = yf.Ticker(ticker).fast_info
+            price = _clean(float(info.last_price))
+            prev_close = _clean(float(info.previous_close))
+            change_pct = (
+                round((price - prev_close) / prev_close * 100, 2)
+                if price and prev_close and prev_close != 0
+                else None
+            )
+        except Exception:
+            change_pct = None
+        result.append({
+            "ticker": ticker,
+            "name": name,
+            "change_pct": change_pct,
+            "bullish": (change_pct or 0) > 0,
+        })
+    green_count = sum(1 for s in result if s["bullish"])
+    return {
+        "stocks": result,
+        "green_count": green_count,
+        "red_count": len(result) - green_count,
+    }
 
 
 def get_chart_bars(symbol: str, interval: str = "5m", period: str = "1d") -> list:

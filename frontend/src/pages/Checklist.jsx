@@ -54,6 +54,24 @@ function inKillzone() {
   return mins >= 9 * 60 + 30 && mins <= 11 * 60 + 30
 }
 
+function barMinsET(b) {
+  const et = new Date(new Date(b.time).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  return et.getHours() * 60 + et.getMinutes()
+}
+
+function calcATR(bars, period = 14) {
+  if (bars.length < 2) return null
+  const trs = []
+  for (let i = 1; i < bars.length; i++) {
+    const h = bars[i].high, l = bars[i].low, pc = bars[i - 1].close
+    if (h == null || l == null || pc == null) continue
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)))
+  }
+  if (trs.length === 0) return null
+  const recent = trs.slice(-period)
+  return recent.reduce((a, b) => a + b, 0) / recent.length
+}
+
 export default function Checklist() {
   const { data: analysis, isLoading: aLoading, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['checklist-analysis'],
@@ -69,6 +87,12 @@ export default function Checklist() {
     queryKey: ['calendar'],
     queryFn: () => apiFetch('/api/market/calendar'),
     refetchInterval: 300_000,
+  })
+
+  const { data: structure } = useQuery({
+    queryKey: ['checklist-structure'],
+    queryFn: () => apiFetch('/api/market/structure'),
+    refetchInterval: 60_000,
   })
 
   const loading = aLoading || advLoading
@@ -119,6 +143,34 @@ export default function Checklist() {
     ? `${highImpact} high-impact USD event(s) today — exercise caution`
     : 'No high-impact events scheduled today'
 
+  // Urgency Trade — first 30-min range breakout with volume confirmation (Coach Dakota / Coach Jay)
+  const strBars   = structure?.bars || []
+  const orBars30  = strBars.filter((b) => { const m = barMinsET(b); return m >= 570 && m < 600 })
+  const postOR    = strBars.filter((b) => barMinsET(b) >= 600)
+  const orH30     = orBars30.length > 0 ? Math.max(...orBars30.map((b) => b.high)) : null
+  const orL30     = orBars30.length > 0 ? Math.min(...orBars30.map((b) => b.low))  : null
+  const avgORVol  = orBars30.length > 0 ? orBars30.reduce((s, b) => s + (b.volume || 0), 0) / orBars30.length : 0
+  let urgencyMet = false
+  let urgencyDetail = 'First 30-min range not yet complete (wait until 10:00 AM ET)'
+  if (orH30 && orL30 && postOR.length > 0) {
+    const breakBar = postOR.find((b) => b.high > orH30 || b.low < orL30)
+    if (breakBar) {
+      const isBull   = breakBar.high > orH30
+      const volConf  = (breakBar.volume || 0) > avgORVol * 1.2
+      urgencyMet     = volConf
+      const dirLabel = isBull ? '↑ BULLISH' : '↓ BEARISH'
+      urgencyDetail  = volConf
+        ? `Price + volume broke OR30 ${dirLabel} — urgency trade active`
+        : `Price broke OR30 ${dirLabel} but volume unconfirmed — wait for volume`
+    } else {
+      urgencyDetail = `Inside OR30 (H:${orH30.toFixed(2)} / L:${orL30.toFixed(2)}) — no breakout yet`
+    }
+  }
+
+  // ATR stop suggestion (14-period, 5m bars)
+  const atr5m = calcATR(strBars)
+  const atrStop = atr5m ? (atr5m * 2).toFixed(2) : null
+
   const criteria = [
     { label: 'NY Killzone Active (9:30–11:30 AM ET)',  met: kz,         detail: kz ? 'Window open — best setups occur here' : 'Outside killzone — setups less reliable',        critical: true  },
     { label: 'HTF Daily Bias Defined (not neutral)',   met: htfOk,      detail: htfBias ? `Daily bias: ${htfBias}` : 'No clear daily trend',                                  critical: true  },
@@ -129,6 +181,7 @@ export default function Checklist() {
     { label: 'Draw on Liquidity (DOL) Target Clear',   met: dolOk,      detail: dolDetail,                                                                                     critical: false },
     { label: 'Market Structure Supports Direction',    met: structOk,   detail: structDetail,                                                                                  critical: false },
     { label: 'No High-Impact Economic Events Today',   met: calOk,      detail: calDetail,                                                                                     critical: false },
+    { label: 'Urgency Trade: OR30 Breakout + Volume',  met: urgencyMet, detail: urgencyDetail,                                                                                 critical: false },
   ]
 
   const metCount = criteria.filter(c => c.met).length
@@ -202,6 +255,12 @@ export default function Checklist() {
           <div><span className="text-terminal-blue font-mono mr-2">5.</span> Retest of iFVG zone → enter at midpoint of the gap</div>
           <div><span className="text-terminal-blue font-mono mr-2">6.</span> DOL (Equal Highs/Lows, PDH/PDL) → target for take-profit</div>
           <div><span className="text-terminal-muted font-mono mr-2">★</span> <span className="text-terminal-yellow">Min R:R 2:1 · Stop beyond sweep wick · Max 2 attempts/day</span></div>
+          {atrStop && (
+            <div className="mt-2 pt-2 border-t border-terminal-border/30">
+              <span className="text-terminal-muted font-mono mr-2">ATR</span>
+              <span className="text-terminal-blue">Suggested stop: <strong>{atrStop} pts</strong> (2× ATR-14 on 5m QQQ)</span>
+            </div>
+          )}
         </div>
       </div>
 
