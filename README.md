@@ -135,8 +135,8 @@ MIT — free to use, modify, and sell. Attribution appreciated but not required.
 
 If this saved you time or money, consider supporting development:
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi)](https://ko-fi.com)
-[![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa?logo=github)](https://github.com/sponsors)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b?logo=ko-fi)](https://ko-fi.com/koestas)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/koestas)
 
 ---
 
