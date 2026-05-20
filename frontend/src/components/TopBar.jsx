@@ -53,7 +53,7 @@ export default function TopBar() {
   return (
     <div className="fixed top-0 left-0 right-0 z-50 h-12 bg-terminal-card border-b border-terminal-border flex items-center px-4 gap-4 text-xs overflow-x-auto">
       {/* Logo */}
-      <div className="text-terminal-blue font-bold text-sm shrink-0 mr-2">NQ FLOW</div>
+      <div className="text-terminal-blue font-bold text-sm shrink-0 mr-2">MFA</div>
 
       {/* QQQ Price */}
       <div className="flex items-center gap-1 shrink-0">

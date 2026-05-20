@@ -749,20 +749,22 @@ def run_backtest(
         htf_dir = htf_result.get("bias", "neutral")
 
         # Determine day quality tier — affects score minimum for that session
-        # Mon: choppier open dynamics → score 70
-        # Fri: pre-weekend chop — require 68+ (was 72, too strict — never fired)
-        # Tue–Thu: peak ICT session quality → score 65
-        # min_score param overrides (0 = use auto tier)
+        # Mon: choppier open dynamics → higher threshold
+        # Fri: pre-weekend chop — slightly elevated threshold
+        # Tue–Thu: peak ICT session quality → base threshold
+        # MES uses higher thresholds because ES generates more "noisy" A+ setups
+        # from its 500-stock breadth — requires cleaner structure to filter false positives
         is_monday = d.weekday() == 0
         is_friday = d.weekday() == 4
+        is_mes    = instrument.upper() == "MES"
         if min_score > 0:
             am_min_score = min_score
         elif is_monday:
-            am_min_score = 70
+            am_min_score = 75 if is_mes else 70
         elif is_friday:
-            am_min_score = 68
+            am_min_score = 72 if is_mes else 68
         else:
-            am_min_score = 65
+            am_min_score = 70 if is_mes else 65
         prior_map = {pd: by_day[pd] for pd in days_sorted[:i]}
 
         used_entries: list = []
@@ -772,8 +774,8 @@ def run_backtest(
 
         # ── AM Killzone (9:30–11:30 ET) — up to 2 trades/day ─────────────────
         # First trade always required. Second trade (reload) only allowed when the
-        # first trade resolved as win or partial_win (not loss). This matches how
-        # prop traders reload after a confirmed profitable setup clears.
+        # first trade resolved as a FULL WIN (not partial_win — partial means price
+        # is already extended; reloading into extension causes losses on reversal).
         while trades_today < 2:
             am_setup = _find_killzone_setup(
                 day_bars, prior_bars,
@@ -833,14 +835,15 @@ def run_backtest(
             })
             equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
 
-            # Only reload after a win or partial_win; stop on loss
-            if am_result == "loss":
+            # Reload only after full win — partial_win means price is extended,
+            # reloading risks catching a reversal. Loss always stops the day.
+            if am_result != "win":
                 break
 
         # OR30 urgency trade — secondary track on days the ICT model didn't fire.
         # Coach Dakota setup: first bar to break the OR range with 1.2x OR average volume.
-        # Lower quality than ICT (B+ grade, 55 score) but adds trades on clean trending days.
-        if not day_traded and not is_monday and not is_friday:
+        # Gold (MGC) excluded — OR30 momentum doesn't apply to commodity futures at NY open.
+        if not day_traded and not is_monday and not is_friday and instrument.upper() != "MGC":
             or_setup = _find_or30_setup(
                 day_bars, prior_bars,
                 instrument=instrument.upper(),
@@ -1135,10 +1138,10 @@ def run_backtest_gold_asia(
     )
 
 
-# ── TEST ENDPOINT — experimental filters, Arlennys base, 1h extended history ──
+# ── TEST ENDPOINT — experimental filters, ICT base strategy, 1h extended history ──
 #
 # /api/backtest/run-test is a sandbox copy of run_backtest.
-# The production /api/backtest/run endpoint (Arlennys Model) is NEVER modified here.
+# The production /api/backtest/run endpoint is NEVER modified here.
 # New concepts from coach transcripts are added to this endpoint only.
 # Supports 1h interval → up to 730-day lookback for large sample sizes.
 
@@ -1163,7 +1166,7 @@ def run_backtest_test(
     contracts:        int   = Query(default=1,    ge=1, le=20),
     daily_loss_limit: int   = Query(default=1000, ge=100, le=5000),
     interval:         str   = Query(default="1h", description="1h (730d max) or 5m (90d max)"),
-    # ── Arlennys base thresholds (override to test) ───────────────────────────
+    # ── Base strategy thresholds (override to test) ──────────────────────────
     score_tue_thu:    int   = Query(default=65,   ge=30, le=100),
     score_mon:        int   = Query(default=70,   ge=30, le=100),
     score_fri:        int   = Query(default=68,   ge=30, le=100),
@@ -1190,7 +1193,7 @@ def run_backtest_test(
 ):
     """
     Test sandbox for new strategy concepts.
-    Base = Arlennys Model. Add experimental flags one at a time and compare.
+    Base = ICT Strategy. Add experimental flags one at a time and compare.
     Use interval=1h for 730-day lookback (statistical confidence).
     Use interval=5m for precise entry-level backtesting (90d max).
     """
@@ -1375,7 +1378,7 @@ def run_backtest_test(
                     continue
 
             # ── Korabi: Tight stop — precision entry only ─────────────────────
-            # Concept: Korabi uses 13-20pt stops on NQ (vs Arlennys 50-120pt).
+            # Concept: Korabi uses 13-20pt stops on NQ (vs standard 50-120pt).
             # Only accept setups where the natural stop is ≤ 50pts MNQ.
             if exp_tight_stop:
                 tight_cap = {"MNQ": 50.0, "MES": 25.0, "MGC": 6.0}.get(instrument.upper(), 50.0)

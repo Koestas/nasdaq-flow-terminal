@@ -114,7 +114,7 @@ function SessionBadge({ session }) {
 }
 
 export default function Backtest() {
-  const [activeTab,  setActiveTab]  = useState('arlennys')
+  const [activeTab,  setActiveTab]  = useState('main')
   const [symIdx,     setSymIdx]     = useState(0)
   const [period,     setPeriod]     = useState(30)
   const [contracts,  setContracts]  = useState(1)
@@ -166,9 +166,9 @@ export default function Backtest() {
           <span className="text-terminal-blue font-bold text-sm">SIGNAL BACKTEST</span>
         </div>
         <div className="ml-auto flex gap-1">
-          <button onClick={() => setActiveTab('arlennys')}
-            className={`px-3 py-1 rounded text-xs font-bold transition-colors ${activeTab === 'arlennys' ? 'bg-terminal-blue text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'}`}>
-            Arlennys Model
+          <button onClick={() => setActiveTab('main')}
+            className={`px-3 py-1 rounded text-xs font-bold transition-colors ${activeTab === 'main' ? 'bg-terminal-blue text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'}`}>
+            ICT Strategy
           </button>
           <button onClick={() => setActiveTab('test')}
             className={`px-3 py-1 rounded text-xs font-bold transition-colors ${activeTab === 'test' ? 'bg-purple-600 text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'}`}>
@@ -365,8 +365,8 @@ export default function Backtest() {
         </div>
       )}
 
-      {/* ── ARLENNYS MODEL ── */}
-      {activeTab === 'arlennys' && (
+      {/* ── ICT STRATEGY ── */}
+      {activeTab === 'main' && (
         <div className="flex flex-col gap-4">
         <div className="flex items-center gap-3 flex-wrap bg-terminal-card border border-terminal-border rounded p-3">
         <div className="flex gap-1">
@@ -414,7 +414,7 @@ export default function Backtest() {
       {/* Disclaimer */}
       <div className="flex items-start gap-2 px-3 py-2 bg-terminal-yellow/5 border border-terminal-yellow/20 rounded text-xs text-terminal-yellow/80">
         <AlertCircle size={12} className="shrink-0 mt-0.5" />
-        Simulated results using Yahoo Finance 5m data. <strong>Arlennys Model</strong>: HTF-aligned ICT sweep+iFVG, grade A/A+, 3-day vol regime filter, partial TP at 1R→breakeven (sessions: AM). <strong>OR30 track</strong>: Coach Dakota urgency trade, OR breakout with 1.2× volume (sessions: OR30). 1 trade/day max each track. Past performance ≠ future results.
+        Simulated results using Yahoo Finance 5m data. <strong>ICT Strategy</strong>: HTF-aligned ICT sweep+iFVG, grade A/A+, 3-day vol regime filter, partial TP at 1R→breakeven (sessions: AM). <strong>OR30 track</strong>: Coach Dakota urgency trade, OR breakout with 1.2× volume (sessions: OR30). 1 trade/day max each track. Past performance ≠ future results.
       </div>
 
       {!data && !running && (
@@ -468,7 +468,7 @@ export default function Backtest() {
             return (
               <div className="flex gap-2 text-[10px] flex-wrap">
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-terminal-card border border-terminal-border rounded">
-                  <span className="text-terminal-muted">Arlennys ICT:</span>
+                  <span className="text-terminal-muted">ICT Strategy:</span>
                   <span className="font-bold text-terminal-text">{ict.length} trades</span>
                   {ictWR !== null && <span className={ictWR >= 60 ? 'text-terminal-green' : 'text-terminal-red'}>{ictWR}% WR</span>}
                 </div>
