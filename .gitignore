@@ -1,3 +1,7 @@
+# Session logs — private, local only
+chat_logs/
+chat-logs/
+
 # Environment / secrets
 .env
 .env.*
