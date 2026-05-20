@@ -60,8 +60,6 @@ export default function AlertSystem() {
   }
 
   useEffect(() => {
-    if (Notification.permission === 'default') Notification.requestPermission()
-
     const schedule = () => {
       check()
       timerRef.current = setTimeout(schedule, inKillzone() ? 30_000 : 120_000)
@@ -76,8 +74,11 @@ export default function AlertSystem() {
     <>
       {/* Bell toggle — fixed near topbar right edge */}
       <button
-        onClick={() => setEnabled(e => !e)}
-        title={enabled ? 'Alerts ON — click to disable' : 'Alerts OFF — click to enable'}
+        onClick={() => {
+          if (Notification.permission === 'default') Notification.requestPermission()
+          setEnabled(e => !e)
+        }}
+        title={enabled ? 'Alerts ON — click to disable' : 'Alerts OFF — click to enable (browser notifications)'}
         className={`fixed top-[14px] right-[90px] z-[200] transition-colors
           ${enabled ? 'text-terminal-yellow hover:text-yellow-300' : 'text-terminal-muted hover:text-terminal-text'}`}
       >

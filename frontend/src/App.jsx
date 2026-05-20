@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
 import NewsTicker from './components/NewsTicker'
+import AlertSystem from './components/AlertSystem'
 import ErrorBoundary from './components/ErrorBoundary'
 import Overview from './pages/Overview'
 import Wave from './pages/Wave'
@@ -40,6 +41,7 @@ export default function App() {
       <div className="min-h-screen bg-terminal-bg">
         <TopBar />
         <NewsTicker />
+        <AlertSystem />
         <Sidebar />
         {/* pt-[76px] = 48px TopBar + 28px NewsTicker */}
         <main className="pt-[76px] pl-44 min-h-screen transition-all duration-200">

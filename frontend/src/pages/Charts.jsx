@@ -22,7 +22,14 @@ const PERIOD_LABELS = {
   '6mo': '6M', '1y': '1Y', '2y': '2Y',
 }
 
-const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true, or30: false, pivot: false }
+const DEFAULT_OVERLAYS = { fvg: true, ifvg: true, ob: true, eql: true, dol: true, or30: false, pivot: false, round: false }
+
+// Round number chop zones per instrument — ICT: price respects big figures
+const ROUND_LEVELS = {
+  'NQ=F': [18000,19000,20000,21000,22000,23000,24000,25000,26000,27000,28000,29000,30000,31000,32000],
+  'ES=F': [4000,4200,4400,4600,4800,5000,5200,5400,5600,5800,6000,6200],
+  'GC=F': [1800,1900,2000,2100,2200,2300,2400,2500,2600,2700,2800,2900,3000,3100,3200,3300,3400],
+}
 
 function toUnix(isoTime) {
   return Math.floor(new Date(isoTime).getTime() / 1000)
@@ -338,6 +345,19 @@ export default function Charts() {
         addLine(ictLinesRef.current, S2, '#F8717166', 'S2', LineStyle.Dotted, 1)
       }
     }
+    // Round number chop zones — ICT big figure levels (only draw those near current price ±15%)
+    if (overlays.round) {
+      const currentPrice = data?.bars?.at(-1)?.close
+      const levels = ROUND_LEVELS[symbol] || []
+      if (currentPrice) {
+        const priceRange = currentPrice * 0.15
+        levels
+          .filter((lvl) => Math.abs(lvl - currentPrice) <= priceRange)
+          .forEach((lvl) => {
+            addLine(ictLinesRef.current, lvl, '#6B728055', `${(lvl / 1000).toFixed(0)}K`, LineStyle.Dotted, 1)
+          })
+      }
+    }
   }, [data, ictData, overlays, isIntraday])
 
   const isUp = hovered ? hovered.close >= hovered.open : true
@@ -422,6 +442,7 @@ export default function Charts() {
             { key: 'dol',  label: 'DOL',     activeColor: 'border-cyan-500/50 text-cyan-400 bg-cyan-500/10' },
             { key: 'or30',  label: 'OR 30m',   activeColor: 'border-purple-400/50 text-purple-300 bg-purple-500/10' },
             { key: 'pivot', label: 'Pivots',    activeColor: 'border-slate-400/50 text-slate-300 bg-slate-500/10' },
+            { key: 'round', label: 'Big Fig',   activeColor: 'border-slate-500/50 text-slate-400 bg-slate-500/10' },
           ].map(({ key, label, activeColor }) => (
             <button
               key={key}
