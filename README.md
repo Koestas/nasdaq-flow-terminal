@@ -4,10 +4,30 @@ A free, open-source trading terminal for micro futures (MNQ, MES, MGC) built on 
 
 ![MFA Terminal](https://img.shields.io/badge/stack-FastAPI%20%2B%20React-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Data](https://img.shields.io/badge/data-Yahoo%20Finance%20(free)-yellow) ![GitHub Discussions](https://img.shields.io/github/discussions/Koestas/micro-futures-analyzer)
 
-<!-- Screenshots: drag images into a GitHub issue to host them, then paste the URLs below -->
-<!-- ![ICT Signals](url-here) -->
-<!-- ![Backtest Results](url-here) -->
-<!-- ![Charts with overlays](url-here) -->
+---
+
+## Screenshots
+
+**Overview — bias score, regime, killzone status, macro**
+![Overview](https://github.com/user-attachments/assets/d14a214f-1cf8-48d9-967b-c82767080433)
+
+**ICT / Strategy — signals, scoring, sweeps, FVGs, DOL**
+![ICT Strategy](https://github.com/user-attachments/assets/18f51945-6ca7-4c68-866d-a51071996f0a)
+
+**Backtest — equity curve, monthly breakdown, per-trade detail**
+![Backtest](https://github.com/user-attachments/assets/23351266-383c-44c7-8b91-19b1ba676db6)
+
+**Charts — candlestick with ICT overlays, VWAP, 200 SMA**
+![Charts](https://github.com/user-attachments/assets/e6a48808-33de-4c3b-91da-f4c6d3b3d774)
+
+**Wave — options flow, net premium, sector momentum**
+![Wave](https://github.com/user-attachments/assets/f00d255d-9d1d-4f1d-832f-ca51d6f02412)
+
+**Unusual Activity — large options sweeps and blocks**
+![Unusual Activity](https://github.com/user-attachments/assets/5ad8b82b-c3d2-4f77-bcae-5b2863d4d860)
+
+**Raw Options Chain — full chain with Greeks and volume**
+![Raw Chain](https://github.com/user-attachments/assets/bd465cd2-f7bc-4dbb-88a3-24ae5ef505ae)
 
 ---
 
