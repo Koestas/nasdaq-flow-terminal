@@ -28,7 +28,7 @@ import Checklist from './pages/Checklist'
 function KeepAlive() {
   useEffect(() => {
     const ping = () => fetch('/api/health').catch(() => {})
-    const id = setInterval(ping, 4 * 60 * 1000)  // every 4 min
+    const id = setInterval(ping, 2 * 60 * 1000)  // every 2 min — keeps codespace alive
     return () => clearInterval(id)
   }, [])
   return null

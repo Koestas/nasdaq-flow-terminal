@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+import asyncio
 import uvicorn
 
 load_dotenv()
@@ -20,7 +22,34 @@ from routes.learn import router as learn_router
 from routes.backtest import router as backtest_router
 
 
-app = FastAPI(title="NASDAQ Flow Terminal", version="1.0.0")
+async def _background_refresh():
+    """Proactively warm the data cache every 5 minutes.
+    Runs regardless of whether any browser tab is open."""
+    import providers.yahoo as yf
+    from providers.calendar import get_calendar
+
+    await asyncio.sleep(15)  # let server fully start first
+    while True:
+        try:
+            yf.get_qqq_price()
+            yf.get_futures_quotes()
+            yf.get_news()
+            yf.get_intraday("QQQ", "5m")
+            get_calendar()
+        except Exception:
+            pass
+        await asyncio.sleep(300)  # 5 minutes
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    task = asyncio.create_task(_background_refresh())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Micro Futures Analyzer", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,11 +70,6 @@ app.include_router(ict_router)
 app.include_router(risk_router)
 app.include_router(learn_router)
 app.include_router(backtest_router)
-
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
 
 
 @app.exception_handler(Exception)

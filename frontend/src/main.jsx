@@ -9,6 +9,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 15_000,
       retry: 2,
+      refetchIntervalInBackground: true,  // keep polling even when tab is hidden / screen locked
     },
   },
 })
