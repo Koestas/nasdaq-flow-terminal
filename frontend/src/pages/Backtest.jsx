@@ -15,7 +15,23 @@ const PERIODS = [
   { value: 60, label: '60 days' },
   { value: 90, label: '90 days' },
 ]
+const TEST_PERIODS = [
+  { value: 90,  label: '90d' },
+  { value: 180, label: '180d' },
+  { value: 365, label: '365d' },
+  { value: 540, label: '540d' },
+  { value: 720, label: '720d' },
+]
 const CONTRACTS = [1, 2, 3, 4, 5]
+
+const KORABI_FLAGS = [
+  { key: 'exp_tight_stop',   label: 'Tight Stop ≤50pt',  color: 'text-purple-400 border-purple-500/40 bg-purple-500/10', desc: 'Korabi precision: only setups with natural stop ≤50pts MNQ' },
+  { key: 'exp_ext_liq',      label: 'External Sweep',    color: 'text-blue-400 border-blue-500/40 bg-blue-500/10',       desc: 'IRL→ERL: require sweep of EQH/EQL/session level, not intraday micro-level' },
+  { key: 'exp_smt_confirm',  label: 'SMT Diverge',       color: 'text-yellow-400 border-yellow-500/40 bg-yellow-500/10', desc: 'Require NQ+ES divergence at sweep level (5m only)' },
+  { key: 'exp_bpr_entry',    label: 'BPR Zone',          color: 'text-cyan-400 border-cyan-500/40 bg-cyan-500/10',       desc: 'Balanced Price Range: entry must fall inside overlapping bull+bear FVG zone' },
+  { key: 'exp_vwap_slope',   label: 'VWAP Slope',        color: 'text-green-400 border-green-500/40 bg-green-500/10',    desc: 'Require rising VWAP for longs, falling for shorts' },
+  { key: 'exp_entry_volume', label: 'Entry Volume',      color: 'text-orange-400 border-orange-500/40 bg-orange-500/10', desc: 'Entry bar must have volume > 0.8× session average' },
+]
 
 function StatCard({ label, value, sub, color = 'text-terminal-text', icon }) {
   return (
@@ -98,10 +114,17 @@ function SessionBadge({ session }) {
 }
 
 export default function Backtest() {
-  const [symIdx,    setSymIdx]    = useState(0)
-  const [period,    setPeriod]    = useState(30)
-  const [contracts, setContracts] = useState(1)
-  const [runKey,    setRunKey]    = useState(null)
+  const [activeTab,  setActiveTab]  = useState('arlennys')
+  const [symIdx,     setSymIdx]     = useState(0)
+  const [period,     setPeriod]     = useState(30)
+  const [contracts,  setContracts]  = useState(1)
+  const [runKey,     setRunKey]     = useState(null)
+  // Test Lab state
+  const [testPeriod,    setTestPeriod]    = useState(365)
+  const [testInterval,  setTestInterval]  = useState('1h')
+  const [testContracts, setTestContracts] = useState(1)
+  const [activeFlags,   setActiveFlags]   = useState({})
+  const [testRunKey,    setTestRunKey]     = useState(null)
 
   const sym = SYMBOLS[symIdx]
 
@@ -113,25 +136,239 @@ export default function Backtest() {
     retry: false,
   })
 
+  const testFlagParams = Object.entries(activeFlags).filter(([,v]) => v).map(([k]) => `${k}=1`).join('&')
+  const { data: testData, isLoading: testLoading, isFetching: testFetching } = useQuery({
+    queryKey: ['backtest-test', sym.value, sym.instrument, testPeriod, testInterval, testContracts, testFlagParams, testRunKey],
+    queryFn: () => apiFetch(`/api/backtest/run-test?symbol=${encodeURIComponent(sym.value)}&instrument=${sym.instrument}&lookback_days=${testPeriod}&interval=${testInterval}&contracts=${testContracts}${testFlagParams ? '&' + testFlagParams : ''}`),
+    enabled: testRunKey !== null,
+    staleTime: Infinity,
+    retry: false,
+  })
+
   const stats  = data?.stats   || {}
   const trades = data?.trades  || []
   const curve  = data?.equity_curve || []
 
-  const running = isLoading || isFetching
+  const testStats   = testData?.stats            || {}
+  const testTrades  = testData?.trades           || []
+  const testCurve   = testData?.equity_curve     || []
+  const testMonthly = testData?.monthly_breakdown || {}
+
+  const running     = isLoading || isFetching
+  const testRunning = testLoading || testFetching
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header */}
+      {/* Header + Tabs */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <BarChart2 size={16} className="text-terminal-blue" />
           <span className="text-terminal-blue font-bold text-sm">SIGNAL BACKTEST</span>
-          <span className="text-terminal-muted text-xs">— ICT strategy over historical data</span>
+        </div>
+        <div className="ml-auto flex gap-1">
+          <button onClick={() => setActiveTab('arlennys')}
+            className={`px-3 py-1 rounded text-xs font-bold transition-colors ${activeTab === 'arlennys' ? 'bg-terminal-blue text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'}`}>
+            Arlennys Model
+          </button>
+          <button onClick={() => setActiveTab('test')}
+            className={`px-3 py-1 rounded text-xs font-bold transition-colors ${activeTab === 'test' ? 'bg-purple-600 text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border hover:text-terminal-text'}`}>
+            🧪 Test Lab
+          </button>
         </div>
       </div>
 
-      {/* Controls */}
-      <div className="flex items-center gap-3 flex-wrap bg-terminal-card border border-terminal-border rounded p-3">
+      {/* ── TEST LAB ── */}
+      {activeTab === 'test' && (
+        <div className="flex flex-col gap-4">
+          {/* Test controls */}
+          <div className="flex flex-col gap-3 bg-terminal-card border border-purple-500/20 rounded p-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider">Symbol</span>
+              {SYMBOLS.map((s, i) => (
+                <button key={s.value} onClick={() => setSymIdx(i)}
+                  className={`px-2 py-0.5 rounded text-xs font-medium ${symIdx === i ? 'bg-terminal-blue text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border'}`}>
+                  {s.label}
+                </button>
+              ))}
+              <span className="w-px h-4 bg-terminal-border mx-1" />
+              <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider">Interval</span>
+              {['1h', '5m'].map(iv => (
+                <button key={iv} onClick={() => setTestInterval(iv)}
+                  className={`px-2 py-0.5 rounded text-xs font-medium ${testInterval === iv ? 'bg-purple-600 text-white' : 'bg-terminal-bg text-terminal-muted border border-terminal-border'}`}>
+                  {iv} {iv === '1h' ? '(720d max)' : '(90d max)'}
+                </button>
+              ))}
+              <span className="w-px h-4 bg-terminal-border mx-1" />
+              <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider">Lookback</span>
+              {TEST_PERIODS.map(p => (
+                <button key={p.value} onClick={() => setTestPeriod(p.value)}
+                  className={`px-2 py-0.5 rounded text-xs font-medium ${testPeriod === p.value ? 'bg-terminal-yellow/20 text-terminal-yellow border border-terminal-yellow/40' : 'bg-terminal-bg text-terminal-muted border border-terminal-border'}`}
+                  disabled={testInterval === '5m' && p.value > 90}>
+                  {p.label}
+                </button>
+              ))}
+              <span className="w-px h-4 bg-terminal-border mx-1" />
+              <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider">Cts</span>
+              {CONTRACTS.map(c => (
+                <button key={c} onClick={() => setTestContracts(c)}
+                  className={`px-2 py-0.5 rounded text-xs font-medium ${testContracts === c ? 'bg-terminal-blue/30 text-terminal-blue border border-terminal-blue/50' : 'bg-terminal-bg text-terminal-muted border border-terminal-border'}`}>
+                  {c}
+                </button>
+              ))}
+            </div>
+
+            {/* Korabi flags */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] text-purple-400 font-bold uppercase tracking-wider">Korabi Trades Concepts</span>
+              <div className="flex flex-wrap gap-2">
+                {KORABI_FLAGS.map(f => {
+                  const on = !!activeFlags[f.key]
+                  return (
+                    <button key={f.key}
+                      onClick={() => setActiveFlags(prev => ({ ...prev, [f.key]: !prev[f.key] }))}
+                      title={f.desc}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all ${on ? f.color : 'text-terminal-muted border-terminal-border bg-terminal-bg'}`}>
+                      {on ? '✓ ' : ''}{f.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="text-[10px] text-terminal-muted">
+                Hover a flag for description · SMT/BPR require 5m interval
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 mt-1">
+              {testRunning && <span className="text-xs text-purple-400 animate-pulse">Running simulation… {testInterval === '1h' && testPeriod >= 365 ? '(720d may take 30–60s)' : ''}</span>}
+              <button onClick={() => setTestRunKey(Date.now())} disabled={testRunning}
+                className="ml-auto px-4 py-1.5 rounded text-xs font-bold bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50 transition-colors">
+                {testRunning ? 'Running…' : '▶ Run Test'}
+              </button>
+            </div>
+          </div>
+
+          {/* Test results */}
+          {testData && !testRunning && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+                <StatCard label="Trades" value={testStats.total_trades ?? 0} sub={`${testData.lookback_days}d · ${testData.interval}`} />
+                <StatCard label="Win Rate" value={`${testStats.win_rate ?? 0}%`}
+                  sub={`${testStats.wins}W · ${testStats.losses}L`}
+                  color={testStats.win_rate >= 65 ? 'text-terminal-green' : testStats.win_rate >= 50 ? 'text-terminal-yellow' : 'text-terminal-red'} />
+                <StatCard label="Profit Factor" value={testStats.profit_factor ?? '--'}
+                  color={testStats.profit_factor >= 2 ? 'text-terminal-green' : testStats.profit_factor >= 1 ? 'text-terminal-yellow' : 'text-terminal-red'} />
+                <StatCard label="Total P&L" value={`$${fmt.num(testStats.total_pnl ?? 0)}`}
+                  color={(testStats.total_pnl ?? 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'} />
+                <StatCard label="Avg Win" value={`$${testStats.avg_win ?? 0}`} color="text-terminal-green" />
+                <StatCard label="Avg Loss" value={`$${testStats.avg_loss ?? 0}`} color="text-terminal-red" />
+              </div>
+
+              {/* Active flags summary */}
+              {Object.values(testData.flags || {}).some(Boolean) && (
+                <div className="flex flex-wrap gap-1 text-[10px]">
+                  <span className="text-terminal-muted">Active flags:</span>
+                  {KORABI_FLAGS.filter(f => testData.flags?.[f.key]).map(f => (
+                    <span key={f.key} className={`px-1.5 py-0.5 rounded border ${f.color}`}>{f.label}</span>
+                  ))}
+                </div>
+              )}
+
+              {/* Monthly breakdown */}
+              {Object.keys(testMonthly).length > 0 && (
+                <div className="bg-terminal-card border border-terminal-border rounded overflow-hidden">
+                  <div className="px-3 py-2 border-b border-terminal-border">
+                    <span className="text-xs font-bold text-terminal-text">Monthly Breakdown</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-terminal-border bg-terminal-bg">
+                          {['Month', 'Trades', 'Wins', 'WR', 'P&L'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left text-terminal-muted font-medium">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(testMonthly).sort().map(([m, v]) => (
+                          <tr key={m} className="border-b border-terminal-border/30 hover:bg-terminal-bg/50">
+                            <td className="px-3 py-1.5 text-terminal-muted">{m}</td>
+                            <td className="px-3 py-1.5 font-mono text-terminal-text">{v.trades}</td>
+                            <td className="px-3 py-1.5 font-mono text-terminal-green">{v.wins}</td>
+                            <td className={`px-3 py-1.5 font-mono font-bold ${v.win_rate >= 65 ? 'text-terminal-green' : v.win_rate >= 50 ? 'text-terminal-yellow' : 'text-terminal-red'}`}>
+                              {v.win_rate}%
+                            </td>
+                            <td className={`px-3 py-1.5 font-mono font-bold ${v.pnl >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}>
+                              {v.pnl >= 0 ? '+' : ''}${fmt.num(v.pnl)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {testCurve.length > 2 && <MiniEquityCurve curve={testCurve} />}
+
+              {/* Test trade log */}
+              {testTrades.length > 0 && (
+                <div className="bg-terminal-card border border-purple-500/10 rounded overflow-hidden">
+                  <div className="px-3 py-2 border-b border-terminal-border flex items-center gap-2">
+                    <span className="text-xs font-bold text-terminal-text">Test Trade Log</span>
+                    <span className="text-[10px] text-terminal-muted">({testTrades.length} simulated)</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-terminal-border bg-terminal-bg">
+                          {['Date', 'Dir', 'HTF', 'Grade', 'Entry', 'Stop', 'Pts', 'P&L', 'RR', 'Result'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left text-terminal-muted font-medium whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {testTrades.map((t, i) => (
+                          <tr key={i} className="border-b border-terminal-border/30 hover:bg-terminal-bg/50">
+                            <td className="px-3 py-1.5 text-terminal-muted whitespace-nowrap">{t.day}</td>
+                            <td className="px-3 py-1.5">
+                              <span className={t.direction === 'bullish' ? 'text-terminal-green font-bold' : 'text-terminal-red font-bold'}>
+                                {t.direction === 'bullish' ? '▲ L' : '▼ S'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-1.5">
+                              <span className={`text-[10px] font-bold ${t.htf_dir?.includes('bullish') ? 'text-terminal-green' : t.htf_dir?.includes('bearish') ? 'text-terminal-red' : 'text-terminal-muted'}`}>
+                                {t.htf_dir?.includes('bullish') ? '▲' : t.htf_dir?.includes('bearish') ? '▼' : '—'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-1.5"><GradeBadge grade={t.grade} /></td>
+                            <td className="px-3 py-1.5 font-mono text-terminal-text">{fmt.num(t.entry)}</td>
+                            <td className="px-3 py-1.5 font-mono text-terminal-red">{t.stop_dist}pt</td>
+                            <td className={`px-3 py-1.5 font-mono ${t.pts >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}>{t.pts >= 0 ? '+' : ''}{t.pts}</td>
+                            <td className={`px-3 py-1.5 font-mono font-bold ${t.pnl >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}>{t.pnl >= 0 ? '+' : ''}${t.pnl}</td>
+                            <td className="px-3 py-1.5 font-mono text-terminal-yellow">{t.rr_achieved}R</td>
+                            <td className="px-3 py-1.5"><ResultBadge result={t.result} eod={t.eod} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {testTrades.length === 0 && (
+                <div className="flex items-center justify-center h-16 text-terminal-muted text-xs">
+                  No qualifying setups with current filters — try loosening thresholds or switching to 5m
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── ARLENNYS MODEL ── */}
+      {activeTab === 'arlennys' && (
+        <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-3 flex-wrap bg-terminal-card border border-terminal-border rounded p-3">
         <div className="flex gap-1">
           {SYMBOLS.map((s, i) => (
             <button key={s.value} onClick={() => setSymIdx(i)}
@@ -347,6 +584,9 @@ export default function Backtest() {
           )}
         </>
       )}
+        </div>
+      )}
     </div>
   )
 }
+

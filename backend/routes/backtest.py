@@ -184,12 +184,21 @@ def _calc_adx(bars: list, period: int = 14) -> float:
     return sum(dx_vals[-period:]) / min(len(dx_vals), period)
 
 
-def _calc_vwap_at(day_bars: list, before_dt) -> float | None:
-    """Cumulative VWAP for the day up to (not including) before_dt."""
+def _calc_vwap_at(day_bars: list, before_dt, session_start_mins: int = 0) -> float | None:
+    """
+    Cumulative VWAP for the day up to (not including) before_dt.
+    session_start_mins: if >0, only include bars at or after that minute-of-day
+    (e.g. 570 = 9:30 AM ET). Use for 1h data to exclude overnight distortion.
+    """
     cum_tpv = cum_vol = 0.0
     for b in day_bars:
-        if _bar_dt(b) >= before_dt:
+        bdt = _bar_dt(b)
+        if bdt >= before_dt:
             break
+        if session_start_mins > 0:
+            bar_mins = bdt.hour * 60 + bdt.minute
+            if bar_mins < session_start_mins:
+                continue
         h, l, c, v = b["high"], b["low"], b["close"], b.get("volume", 0) or 0
         if None in (h, l, c):
             continue
@@ -461,7 +470,11 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
                          min_score: int = 65,
                          sweep_max_age_mins: int = 90,
                          require_mss: bool = True,
-                         vol_regime_pct: float = 4.0) -> dict | None:
+                         vol_regime_pct: float = 4.0,
+                         min_kz_bars: int = 6,
+                         session_vwap_start: int = 0,
+                         fvg_prox_mult: float = 3.0,
+                         atr_min_mult: float = 2.0) -> dict | None:
     """
     Walk through a killzone bar-by-bar; return the first A/A+ setup with sweep + iFVG.
     htf_direction: daily bias — filters out contra-trend setups.
@@ -476,7 +489,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
            <= _bar_dt(b).hour * 60 + _bar_dt(b).minute
            <= kz_end[0] * 60 + kz_end[1]
     ]
-    if len(kz_bars) < 6:
+    if len(kz_bars) < min_kz_bars:
         return None
 
     # Build context from prior bars + bars up to this point in killzone
@@ -517,7 +530,7 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
 
         # 2. VWAP position: price must be on correct side of day VWAP
         #    Tolerance: 0.3% (50pt on NQ) — tight enough to exclude clear contra-trend entries
-        vwap_now = _calc_vwap_at(day_bars, bar_dt)
+        vwap_now = _calc_vwap_at(day_bars, bar_dt, session_start_mins=session_vwap_start)
         if vwap_now:
             if bias == "bullish" and price < vwap_now * 0.997:
                 continue   # price clearly below VWAP = skip long
@@ -625,17 +638,18 @@ def _find_killzone_setup(day_bars: list, all_prior_bars: list, instrument: str =
         buf     = config["stop_buffer"]
         min_st  = config["min_stop_pts"]
 
-        # Skip stale FVGs — price must be near the zone (within 3× the gap size)
-        if abs(price - fvg["mid"]) > fvg["size"] * 3 + min_st:
+        # Skip stale FVGs — price must be near the zone (within fvg_prox_mult× the gap size)
+        if abs(price - fvg["mid"]) > fvg["size"] * fvg_prox_mult + min_st:
             continue
 
         # Prevent re-entering the same FVG zone already used today
         if used_entries and any(abs(entry - prev) < min_st for prev in used_entries):
             continue
 
-        # ATR-based stop: 2× ATR gives room for normal noise (Coach Ball / Coach Dakota)
-        atr       = _calc_atr(context[-50:])
-        atr_dist  = atr * 2.0
+        # ATR-based stop: atr_min_mult × ATR gives room for normal noise
+        # Use atr_min_mult=0 for 1h data (ATR is ~135pts/bar, would blow the cap)
+        atr      = _calc_atr(context[-50:])
+        atr_dist = atr * atr_min_mult
 
         if bias == "bullish":
             sweep_stop = (min(recent[-1].get("wick_low",  recent[-1]["level"]), fvg["bottom"]) - buf)
@@ -1119,3 +1133,357 @@ def run_backtest_gold_asia(
         session_label="Gold Asia/London",
         start_bar_index=3,
     )
+
+
+# ── TEST ENDPOINT — experimental filters, Arlennys base, 1h extended history ──
+#
+# /api/backtest/run-test is a sandbox copy of run_backtest.
+# The production /api/backtest/run endpoint (Arlennys Model) is NEVER modified here.
+# New concepts from coach transcripts are added to this endpoint only.
+# Supports 1h interval → up to 730-day lookback for large sample sizes.
+
+def _download_1h(symbol: str, lookback_days: int) -> list:
+    """Download up to 720 days of 1h bars for extended backtesting."""
+    end_dt   = datetime.now(tz=UTC)
+    start_dt = end_dt - timedelta(days=min(lookback_days + 3, 720))
+    try:
+        import yfinance as yf
+        df = yf.download(symbol, start=start_dt, end=end_dt,
+                         interval="1h", progress=False, auto_adjust=True)
+        return _parse_bars(df, symbol)
+    except Exception:
+        return []
+
+
+@router.get("/run-test")
+def run_backtest_test(
+    symbol:           str   = Query(default="NQ=F"),
+    instrument:       str   = Query(default="MNQ"),
+    lookback_days:    int   = Query(default=90,   ge=5, le=720),
+    contracts:        int   = Query(default=1,    ge=1, le=20),
+    daily_loss_limit: int   = Query(default=1000, ge=100, le=5000),
+    interval:         str   = Query(default="1h", description="1h (730d max) or 5m (90d max)"),
+    # ── Arlennys base thresholds (override to test) ───────────────────────────
+    score_tue_thu:    int   = Query(default=65,   ge=30, le=100),
+    score_mon:        int   = Query(default=70,   ge=30, le=100),
+    score_fri:        int   = Query(default=68,   ge=30, le=100),
+    vol_regime_pct:   float = Query(default=4.0,  ge=1.0, le=15.0),
+    atr_stop_cap:     float = Query(default=120.0,ge=20.0, le=500.0),
+    require_mss:      int   = Query(default=1,    ge=0, le=1),
+    # ── Experimental flags (set via transcript concepts) ─────────────────────
+    # Each flag defaults OFF — only activate when a transcript concept is added
+    exp_vwap_slope:   int   = Query(default=0, ge=0, le=1,
+                                    description="Require rising VWAP slope for longs, falling for shorts"),
+    exp_entry_volume: int   = Query(default=0, ge=0, le=1,
+                                    description="Require entry bar volume > 0.8x session average"),
+    exp_or30_required:int   = Query(default=0, ge=0, le=1,
+                                    description="Require OR30 breakout before ICT entry (5m only)"),
+    # ── Korabi Trades concepts ────────────────────────────────────────────────
+    exp_smt_confirm:  int   = Query(default=0, ge=0, le=1,
+                                    description="Require SMT divergence (NQ+ES disagree) in trade direction"),
+    exp_ext_liq:      int   = Query(default=0, ge=0, le=1,
+                                    description="Require external liquidity sweep (EQH/EQL/session level, not just intraday)"),
+    exp_bpr_entry:    int   = Query(default=0, ge=0, le=1,
+                                    description="Require BPR zone (overlapping bull+bear FVGs at entry)"),
+    exp_tight_stop:   int   = Query(default=0, ge=0, le=1,
+                                    description="Hard cap stop at 50pts MNQ / 25pts MES (Korabi precision entries)"),
+):
+    """
+    Test sandbox for new strategy concepts.
+    Base = Arlennys Model. Add experimental flags one at a time and compare.
+    Use interval=1h for 730-day lookback (statistical confidence).
+    Use interval=5m for precise entry-level backtesting (90d max).
+    """
+    use_1h = (interval == "1h")
+    if use_1h:
+        bars_all = _download_1h(symbol, lookback_days)
+    else:
+        end_dt   = datetime.now(tz=UTC)
+        start_dt = end_dt - timedelta(days=min(lookback_days + 3, 93))
+        bars_all = _download(symbol, start_dt, end_dt + timedelta(hours=2), "5m")
+
+    if not bars_all:
+        return {"error": f"No data for {symbol} at {interval}"}
+
+    config     = _INSTRUMENT_CONFIG.get(instrument.upper(), _INSTRUMENT_CONFIG["MNQ"])
+    usd_per_pt = config["dollars_per_point"] * contracts
+
+    # Daily bars for HTF bias (always 1d regardless of test interval)
+    end_dt_htf   = datetime.now(tz=UTC)
+    daily_bars_all = _download(symbol, end_dt_htf - timedelta(days=90), end_dt_htf, "1d")
+
+    # ES bars for SMT divergence (download only when flag is active to save time)
+    es_bars_all: list = []
+    if exp_smt_confirm:
+        es_sym = "ES=F" if symbol == "NQ=F" else "NQ=F"
+        if use_1h:
+            es_bars_all = _download_1h(es_sym, lookback_days)
+        else:
+            end_dt_es = datetime.now(tz=UTC)
+            es_bars_all = _download(es_sym, end_dt_es - timedelta(days=min(lookback_days+3, 93)),
+                                    end_dt_es + timedelta(hours=2), "5m")
+    es_by_day = _group_by_day(es_bars_all) if es_bars_all else {}
+
+    by_day        = _group_by_day(bars_all)
+    trades        = []
+    running_pnl   = 0.0
+    equity_curve  = []
+    days_sorted   = sorted(by_day.keys())
+
+    for i, d in enumerate(days_sorted):
+        if d.weekday() >= 5:
+            continue
+
+        day_bars   = by_day[d]
+        prior_bars = []
+        for pd in days_sorted[:i]:
+            prior_bars.extend(by_day[pd])
+        prior_bars = prior_bars[-300:]
+
+        htf_bars   = [b for b in daily_bars_all if b["time"][:10] < d.isoformat()]
+        htf_result = get_htf_bias(htf_bars) if len(htf_bars) >= 22 else {"bias": "neutral"}
+        htf_dir    = htf_result.get("bias", "neutral")
+
+        is_monday = d.weekday() == 0
+        is_friday = d.weekday() == 4
+        day_min_score = score_mon if is_monday else score_fri if is_friday else score_tue_thu
+
+        prior_map     = {pd: by_day[pd] for pd in days_sorted[:i]}
+        used_entries: list = []
+        day_traded    = False
+        trades_today  = 0
+        next_bar_idx  = 1 if use_1h else 6  # 1h killzone has fewer bars
+
+        while trades_today < 2:
+            # ── Experimental: VWAP slope filter ───────────────────────────────
+            # If enabled, compute slope of VWAP over last 2 1h bars before entry;
+            # skip longs when VWAP is declining, skip shorts when rising.
+            # Implemented inside _find_killzone_setup via extra pre-check for now.
+
+            setup = _find_killzone_setup(
+                day_bars, prior_bars,
+                instrument=instrument.upper(),
+                start_bar_index=next_bar_idx,
+                htf_direction=htf_dir,
+                used_entries=used_entries,
+                kz_start=(9, 30), kz_end=(11, 30),
+                prior_days=prior_map,
+                min_score=day_min_score,
+                sweep_max_age_mins=180 if use_1h else 90,
+                require_mss=bool(require_mss),
+                vol_regime_pct=vol_regime_pct,
+                min_kz_bars=2 if use_1h else 6,
+                session_vwap_start=570 if use_1h else 0,
+                fvg_prox_mult=12.0 if use_1h else 3.0,
+                atr_min_mult=0.0 if use_1h else 2.0,
+            )
+
+            if not setup:
+                break
+
+            bar_dt = _bar_dt(setup["entry_bar"])
+
+            # ── Experimental: VWAP slope ──────────────────────────────────────
+            if exp_vwap_slope:
+                vwap_now  = _calc_vwap_at(day_bars, bar_dt)
+                look_back = bar_dt - timedelta(minutes=60 if use_1h else 30)
+                vwap_prev = _calc_vwap_at(day_bars, look_back)
+                if vwap_now and vwap_prev:
+                    slope_up   = vwap_now > vwap_prev
+                    slope_down = vwap_now < vwap_prev
+                    if setup["direction"] == "bullish" and not slope_up:
+                        next_bar_idx = setup["bar_index"] + 1
+                        continue
+                    if setup["direction"] == "bearish" and not slope_down:
+                        next_bar_idx = setup["bar_index"] + 1
+                        continue
+
+            # ── Experimental: entry-bar volume ────────────────────────────────
+            if exp_entry_volume:
+                entry_vol = setup["entry_bar"].get("volume", 0) or 0
+                session_bars_so_far = [
+                    b for b in day_bars
+                    if 9 * 60 + 30 <= _bar_dt(b).hour * 60 + _bar_dt(b).minute <= 11 * 60 + 30
+                ]
+                avg_sess_vol = (sum(b.get("volume", 0) or 0 for b in session_bars_so_far)
+                                / max(len(session_bars_so_far), 1))
+                if avg_sess_vol > 0 and entry_vol < avg_sess_vol * 0.8:
+                    next_bar_idx = setup["bar_index"] + 1
+                    continue
+
+            # ── Experimental: OR30 required before ICT entry ──────────────────
+            if exp_or30_required and not use_1h:
+                if not _check_or30_breakout(day_bars, setup["direction"], bar_dt):
+                    next_bar_idx = setup["bar_index"] + 1
+                    continue
+
+            # ── Korabi: SMT divergence required ──────────────────────────────
+            # Concept: A+ entries happen when NQ and ES diverge at the same level.
+            # NQ sweeps a swing and ES holds (or vice versa) = institutional accumulation.
+            if exp_smt_confirm:
+                _kz_ctx  = (prior_bars + day_bars)[-200:]
+                _sl      = extract_session_levels(_kz_ctx, reference_dt=bar_dt)
+                _ehl     = detect_equal_highs_lows(_kz_ctx)
+                # Secondary bars: ES on same day window
+                _es_day  = es_by_day.get(d, [])
+                _es_prior: list = []
+                for _pd in days_sorted[:i]:
+                    _es_prior.extend(es_by_day.get(_pd, []))
+                _es_ctx  = (_es_prior + _es_day)[-200:]
+                _adv = get_advanced_signals(bars=_kz_ctx, session_levels=_sl,
+                                            equal_hl=_ehl, bars_secondary=_es_ctx,
+                                            bias_direction=setup["direction"])
+                smt = _adv.get("smt_divergence") or {}
+                if not (smt.get("detected") or smt.get("divergence_detected")):
+                    next_bar_idx = setup["bar_index"] + 1
+                    continue
+
+            # ── Korabi: External liquidity sweep required ─────────────────────
+            # Concept: IRL→ERL — price must have swept an external (major) level
+            # like EQH, EQL, prev session H/L, or a multi-day swing.
+            # Internal sweeps (intraday micro-levels) don't qualify.
+            if exp_ext_liq:
+                sweep_label = (setup.get("sweep_label") or "").lower()
+                is_external = any(kw in sweep_label for kw in
+                                  ("eqh", "eql", "equal", "prev", "session", "asia", "london",
+                                   "week", "month", "swing", "bsl", "ssl"))
+                if not is_external:
+                    next_bar_idx = setup["bar_index"] + 1
+                    continue
+
+            # ── Korabi: BPR (Balanced Price Range) at entry zone ─────────────
+            # Concept: Two overlapping opposing FVGs create a premium/discount zone.
+            # Entry inside this zone = high-probability because both buy-side and
+            # sell-side inefficiency cancel out at that price.
+            if exp_bpr_entry:
+                _kz_ctx2 = (prior_bars + day_bars)[-200:]
+                all_fvgs  = detect_fvg(_kz_ctx2)
+                bull_fvgs = [f for f in all_fvgs if f.get("type") == "bullish_fvg" and not f.get("filled")]
+                bear_fvgs = [f for f in all_fvgs if f.get("type") == "bearish_fvg" and not f.get("filled")]
+                bpr_found = False
+                for bf in bull_fvgs:
+                    for brf in bear_fvgs:
+                        overlap_lo = max(bf.get("bottom", 0), brf.get("bottom", 0))
+                        overlap_hi = min(bf.get("top", 0),    brf.get("top",    0))
+                        if overlap_hi > overlap_lo and overlap_lo <= setup["entry"] <= overlap_hi:
+                            bpr_found = True
+                            break
+                    if bpr_found:
+                        break
+                if not bpr_found:
+                    next_bar_idx = setup["bar_index"] + 1
+                    continue
+
+            # ── Korabi: Tight stop — precision entry only ─────────────────────
+            # Concept: Korabi uses 13-20pt stops on NQ (vs Arlennys 50-120pt).
+            # Only accept setups where the natural stop is ≤ 50pts MNQ.
+            if exp_tight_stop:
+                tight_cap = {"MNQ": 50.0, "MES": 25.0, "MGC": 6.0}.get(instrument.upper(), 50.0)
+                if setup["stop_dist"] > tight_cap:
+                    next_bar_idx = setup["bar_index"] + 1
+                    continue
+
+            # ── Apply ATR stop cap override ───────────────────────────────────
+            if setup["stop_dist"] > atr_stop_cap:
+                next_bar_idx = setup["bar_index"] + 1
+                continue
+
+            outcome = _simulate_trade(
+                setup["entry"], setup["stop"], setup["target"],
+                setup["direction"], setup["remaining_bars"],
+                stop_dist=setup["stop_dist"],
+            )
+            res  = outcome["result"]
+            sd   = setup["stop_dist"]
+
+            if res == "win":
+                pts = (outcome["exit_price"] - setup["entry"]) if setup["direction"] == "bullish" \
+                      else (setup["entry"] - outcome["exit_price"])
+            elif res == "partial_win":
+                pts = sd * 0.5
+            else:
+                pts = (outcome["exit_price"] - setup["entry"]) if setup["direction"] == "bullish" \
+                      else (setup["entry"] - outcome["exit_price"])
+
+            pnl = round(pts * usd_per_pt, 2)
+            running_pnl += pnl
+            day_traded   = True
+            trades_today += 1
+            used_entries.append(setup["entry"])
+            next_bar_idx = setup["bar_index"] + 2
+
+            session_label = "TEST" if trades_today == 1 else "TEST2"
+            trades.append({
+                "date": d.isoformat(), "day": d.strftime("%a %b %d"),
+                "session": session_label, "direction": setup["direction"],
+                "grade": setup["grade"], "score": setup["score"],
+                "htf_dir": htf_dir,
+                "entry": setup["entry"], "stop": setup["stop"],
+                "target": setup["target"], "exit_price": outcome["exit_price"],
+                "result": res, "eod": outcome.get("eod", False),
+                "pts": round(pts, 2), "pnl": pnl,
+                "rr_achieved": round(pts / sd, 2) if sd else 0,
+                "rr_planned": setup["rr_ratio"], "stop_dist": sd,
+                "sweep": setup["sweep_label"], "fvg_zone": setup["fvg_zone"],
+                "dol": setup["dol_reason"], "running_pnl": round(running_pnl, 2),
+            })
+            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": True})
+
+            if res == "loss":
+                break
+
+        if not day_traded:
+            equity_curve.append({"date": d.isoformat(), "pnl": round(running_pnl, 2), "trade": False})
+
+    wins   = [t for t in trades if t["result"] in ("win", "partial_win")]
+    losses = [t for t in trades if t["result"] == "loss"]
+    total  = len(trades)
+    win_rate = round(len(wins) / total * 100, 1) if total else 0
+    avg_win  = round(sum(t["pnl"] for t in wins)   / len(wins),   2) if wins   else 0
+    avg_loss = round(sum(t["pnl"] for t in losses) / len(losses), 2) if losses else 0
+    pf       = round(abs(sum(t["pnl"] for t in wins)) /
+                     max(abs(sum(t["pnl"] for t in losses)), 0.01), 2)
+    avg_rr   = round(sum(t["rr_achieved"] for t in trades) / total, 2) if total else 0
+    monthly_projection = round(running_pnl / max(lookback_days, 1) * 21, 2)
+
+    # Breakdown by month
+    monthly: dict = {}
+    for t in trades:
+        m = t["date"][:7]
+        monthly.setdefault(m, {"trades": 0, "wins": 0, "pnl": 0.0})
+        monthly[m]["trades"] += 1
+        if t["result"] in ("win", "partial_win"):
+            monthly[m]["wins"] += 1
+        monthly[m]["pnl"] += t["pnl"]
+
+    return {
+        "symbol": symbol, "instrument": instrument.upper(),
+        "interval": interval, "contracts": contracts,
+        "lookback_days": lookback_days,
+        "flags": {
+            "exp_vwap_slope":    bool(exp_vwap_slope),
+            "exp_entry_volume":  bool(exp_entry_volume),
+            "exp_or30_required": bool(exp_or30_required),
+            "exp_smt_confirm":   bool(exp_smt_confirm),
+            "exp_ext_liq":       bool(exp_ext_liq),
+            "exp_bpr_entry":     bool(exp_bpr_entry),
+            "exp_tight_stop":    bool(exp_tight_stop),
+        },
+        "stats": {
+            "total_trades": total, "wins": len(wins), "losses": len(losses),
+            "eod_closes":   len([t for t in trades if t.get("eod")]),
+            "win_rate": win_rate, "total_pnl": round(running_pnl, 2),
+            "monthly_projection": monthly_projection,
+            "avg_win": avg_win, "avg_loss": avg_loss,
+            "profit_factor": pf, "avg_rr": avg_rr,
+            "max_drawdown": _calc_max_drawdown(equity_curve),
+            "best_trade":  max(trades, key=lambda t: t["pnl"], default=None),
+            "worst_trade": min(trades, key=lambda t: t["pnl"], default=None),
+        },
+        "monthly_breakdown": {
+            m: {**v, "win_rate": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0}
+            for m, v in sorted(monthly.items())
+        },
+        "trades": trades,
+        "equity_curve": equity_curve,
+    }
