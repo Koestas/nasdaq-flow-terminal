@@ -1,0 +1,40 @@
+# Environment / secrets
+.env
+.env.*
+*.env
+backend/.schwab_tokens.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Database (local only — not for distribution)
+backend/terminal.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+/tmp/uvicorn.log
