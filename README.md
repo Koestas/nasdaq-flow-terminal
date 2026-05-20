@@ -2,7 +2,12 @@
 
 A free, open-source trading terminal for micro futures (MNQ, MES, MGC) built on ICT/SMC concepts. Real-time signals, backtesting, risk management, and an ICT coaching replay mode — all running locally on free data.
 
-![MFA Terminal](https://img.shields.io/badge/stack-FastAPI%20%2B%20React-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Data](https://img.shields.io/badge/data-Yahoo%20Finance%20(free)-yellow)
+![MFA Terminal](https://img.shields.io/badge/stack-FastAPI%20%2B%20React-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Data](https://img.shields.io/badge/data-Yahoo%20Finance%20(free)-yellow) ![GitHub Discussions](https://img.shields.io/github/discussions/Koestas/micro-futures-analyzer)
+
+<!-- Screenshots: drag images into a GitHub issue to host them, then paste the URLs below -->
+<!-- ![ICT Signals](url-here) -->
+<!-- ![Backtest Results](url-here) -->
+<!-- ![Charts with overlays](url-here) -->
 
 ---
 
