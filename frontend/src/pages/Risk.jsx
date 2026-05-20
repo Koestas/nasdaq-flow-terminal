@@ -107,7 +107,7 @@ export default function Risk() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-terminal-text">Risk Manager</h1>
-          <p className="text-sm text-terminal-muted">Lucid 25k Pro · Trailing drawdown · Position sizing</p>
+          <p className="text-sm text-terminal-muted">Trailing drawdown · Position sizing · Daily loss limit</p>
         </div>
         <button onClick={() => refetch()} className="btn btn-ghost gap-1.5 text-xs">
           <RefreshCw size={13} /> Refresh
@@ -161,7 +161,7 @@ export default function Risk() {
             <StatRow label="Trailing Floor" value={fmt.currency(account.trailing_floor)}
               sub={account.floor_locked ? 'Floor locked — max protection' : 'Floor trailing with profit'} />
             <StatRow label="Daily Risk Remaining" value={fmt.currency(account.daily_risk_remaining)}
-              sub={`${account.daily_risk_pct_used}% of $1,000 limit used`} />
+              sub={`${account.daily_risk_pct_used}% of daily limit used`} />
             <StatRow label="Daily P&L" value={fmt.currency(account.daily_pnl)}
               highlight={account.daily_pnl !== 0} />
 
@@ -175,27 +175,26 @@ export default function Risk() {
             </div>
           </div>
 
-          {/* Payout Status */}
+          {/* Profit Target */}
           <div className="card border border-terminal-border space-y-1">
             <div className="flex items-center justify-between mb-3">
-              <div className="text-xs font-semibold text-terminal-muted uppercase tracking-wider">Payout Progress</div>
+              <div className="text-xs font-semibold text-terminal-muted uppercase tracking-wider">Profit Target</div>
               {account.payout_ready
                 ? <StatusBadge status="READY" color="green" />
                 : <StatusBadge status="BUILDING" color="blue" />}
             </div>
 
-            <StatRow label="Payout Threshold" value={fmt.currency(account.payout_threshold)} />
-            <StatRow label="Safe Trigger (buffer)" value={fmt.currency(account.safe_payout_trigger)}
-              sub="Ensures $26,500 remains after $1,500 payout" />
-            <StatRow label="To Safe Trigger" value={fmt.currency(account.to_safe_trigger)} highlight />
-            <StatRow label="Max Payout" value={fmt.currency(account.max_payout)} />
+            <StatRow label="Profit Target" value={fmt.currency(account.payout_threshold)} />
+            <StatRow label="Safe Zone" value={fmt.currency(account.safe_payout_trigger)} />
+            <StatRow label="To Safe Zone" value={fmt.currency(account.to_safe_trigger)} highlight />
+            <StatRow label="Max Withdrawal" value={fmt.currency(account.max_payout)} />
 
             <div className="pt-2">
               <ProgressBar
                 value={account.current_balance - 25000}
                 max={account.safe_payout_trigger - 25000}
                 color="blue"
-                label="Progress to safe payout trigger"
+                label="Progress to profit target"
               />
             </div>
 
@@ -327,27 +326,6 @@ export default function Risk() {
         )}
       </div>
 
-      {/* Rules Reference */}
-      <div className="card border border-terminal-border/50">
-        <div className="text-xs font-semibold text-terminal-muted uppercase tracking-wider mb-3">Lucid 25k Pro Rules</div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs">
-          {[
-            ['Starting Balance', '$25,000'],
-            ['Daily Loss Limit', '$1,000'],
-            ['Floor Trailing', 'Follows profit up'],
-            ['Floor Locks At', '$25,100 (max protection)'],
-            ['Payout Threshold', '$26,100'],
-            ['Max Payout', '$1,500'],
-            ['Safe After Payout', '$26,500 remaining'],
-            ['Safe Trigger', '$28,000 balance'],
-          ].map(([k, v]) => (
-            <div key={k} className="flex justify-between py-1 border-b border-terminal-border/30">
-              <span className="text-terminal-muted">{k}</span>
-              <span className="font-mono text-terminal-text">{v}</span>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }

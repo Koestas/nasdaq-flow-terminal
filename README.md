@@ -13,7 +13,7 @@ A free, open-source trading terminal for micro futures (MNQ, MES, MGC) built on 
 - **ICT Signals** — FVG/iFVG detection (with displacement), order blocks, liquidity sweeps, MSS/CHoCH confirmation, OTE zone (0.618–0.786), session levels (Asia/London/NY), draw on liquidity, PO3/AMD phase
 - **NY Killzone Strategy** — HTF-aligned ICT setup scoring (0–100 pts), grade A/A+ filter, 3-day volatility regime gate, partial TP at 1R→BE, tested at 60–75% win rate
 - **Backtest Engine** — 5m precision (90 days) or 1h extended (720 days, Yahoo Finance max). Monthly breakdown, equity curve, per-trade detail
-- **Risk Manager** — Lucid 25k Pro prop firm math: trailing floor tracker, position sizer, daily trade plan, payout calculator
+- **Risk Manager** — trailing floor tracker, position sizer (MNQ/MES/MGC), daily trade plan, profit target tracker
 - **ICT Learning Mode** — pick any past date, step forward bar by bar, AI coach panel explains what's happening live
 - **Charts** — lightweight-charts with ICT overlays: FVG, iFVG, OB, EQL/EQH, DOL, OR 30m, Pivot Points, Big Figure levels, 200 SMA, VWAP
 - **Live News Ticker** — scrolling Bloomberg-style bar with sentiment-coded headlines + market alerts
@@ -72,7 +72,7 @@ No API keys required. Yahoo Finance data works out of the box.
 | ICT | Full ICT signal panel — sweeps, FVGs, OBs, DOL, scoring |
 | Charts | Candlestick + all ICT overlays, VWAP, 200 SMA |
 | Backtest | NY Killzone strategy backtest + Test Lab (experimental flags) |
-| Risk | Prop firm risk manager — Lucid 25k Pro math |
+| Risk | Risk manager — trailing floor, position sizing, daily P&L |
 | Learn | Step-forward replay with ICT coaching panel |
 | Checklist | Pre-trade criteria checklist |
 | Wave / GEX | Options flow and gamma exposure |
@@ -135,4 +135,4 @@ If this saved you time or money, consider supporting development:
 
 ---
 
-*Built for prop traders on Lucid Trading, Apex, or any 25k account. Not financial advice.*
+*Not financial advice. Past backtest results do not guarantee future performance.*
